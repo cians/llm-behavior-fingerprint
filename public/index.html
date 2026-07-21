@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="通过低熵随机选择任务生成并对比大模型行为指纹。" />
+    <title>模型行为指纹实验室</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="模型行为指纹实验室首页">
+        <span class="brand-mark" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </span>
+        <span>
+          <strong>MODEL TRACE</strong>
+          <small>行为指纹实验室 · beta</small>
+        </span>
+      </a>
+      <nav class="topnav" aria-label="页面导航">
+        <a href="#workspace">采样台</a>
+        <a href="#history">历史库</a>
+        <a href="#references">引用</a>
+        <button class="icon-button" id="openHelp" type="button" aria-label="查看原理说明">?</button>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero reveal">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> BEHAVIORAL MODEL AUTHENTICATION</p>
+          <h1>每一次“随机”，<br />都在泄露<span>它是谁。</span></h1>
+          <p class="hero-lead">
+            用一组不起眼的随机问题，测出模型稳定的概率偏好。生成行为指纹、对比两个 API，或让新结果与历史基线碰面。
+          </p>
+          <div class="hero-actions">
+            <a class="primary-button" href="#workspace">开始采样 <span>→</span></a>
+            <button class="text-button" id="openMethod" type="button">了解计算方法 <span>↗</span></button>
+          </div>
+        </div>
+        <div class="hero-instrument" aria-label="行为指纹示意图">
+          <div class="orbit orbit-a"></div>
+          <div class="orbit orbit-b"></div>
+          <div class="orbit orbit-c"></div>
+          <div class="instrument-core">
+            <div class="core-kicker">LIVE SIGNATURE</div>
+            <strong>8F2A</strong>
+            <span>BEHAVIOR HASH</span>
+          </div>
+          <div class="signal-card signal-one"><b>47</b><span>NUMBER PEAK</span></div>
+          <div class="signal-card signal-two"><b>BLUE</b><span>COLOR BIAS</span></div>
+          <div class="signal-card signal-three"><b>1.08</b><span>ENTROPY BIT</span></div>
+          <svg class="trace-lines" viewBox="0 0 560 500" aria-hidden="true">
+            <path d="M75 242 C145 140 196 336 270 218 S403 135 486 245" />
+            <path d="M65 302 C142 240 184 382 285 272 S424 238 500 305" />
+          </svg>
+        </div>
+      </section>
+
+      <section class="method-strip reveal" aria-label="工作原理">
+        <article><span>01</span><div><strong>投放探针</strong><small>多类低熵随机选择题</small></div></article>
+        <i>→</i>
+        <article><span>02</span><div><strong>统计偏好</strong><small>分布、熵与峰值选择</small></div></article>
+        <i>→</i>
+        <article><span>03</span><div><strong>计算距离</strong><small>Jensen–Shannon 距离</small></div></article>
+        <i>→</i>
+        <article><span>04</span><div><strong>形成证据</strong><small>相似度与采样置信度</small></div></article>
+      </section>
+
+      <section class="workspace reveal" id="workspace">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow"><span></span> FINGERPRINT WORKBENCH</p>
+            <h2>选择一次实验</h2>
+          </div>
+          <p>模型接口默认按 OpenAI Chat Completions 兼容格式请求；Base URL 和完整接口地址均可识别。</p>
+        </div>
+
+        <div class="mode-switch" role="tablist" aria-label="实验模式">
+          <button class="mode-tab active" type="button" role="tab" aria-selected="true" data-mode="single">
+            <span>01</span><b>生成指纹</b><small>扫描一个模型端点</small>
+          </button>
+          <button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="dual">
+            <span>02</span><b>双端对比</b><small>扫描并比较两个端点</small>
+          </button>
+          <button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="history">
+            <span>03</span><b>历史对比</b><small>新端点对历史基线</small>
+          </button>
+        </div>
+
+        <div class="workbench">
+          <form id="experimentForm" novalidate>
+            <div class="endpoint-grid" id="endpointGrid">
+              <fieldset class="endpoint-card" data-endpoint="a">
+                <legend><span>A</span><b id="endpointATitle">待测端点</b></legend>
+                <label>
+                  <span>端点标签 <small>仅用于标记结果</small></span>
+                  <input name="labelA" autocomplete="off" placeholder="例如：生产环境 Claude" />
+                </label>
+                <label>
+                  <span>模型 URL <small>Base URL 或 /chat/completions</small></span>
+                  <input name="urlA" type="url" autocomplete="url" placeholder="https://api.example.com/v1" required />
+                </label>
+                <label>
+                  <span>API Key <small>只在本次请求中使用</small></span>
+                  <span class="secret-field">
+                    <input name="keyA" type="password" autocomplete="off" placeholder="sk-••••••••••••" />
+                    <button type="button" class="reveal-secret" data-for="keyA" aria-label="显示或隐藏 API Key">显示</button>
+                  </span>
+                </label>
+                <label>
+                  <span>模型 ID <small>可手动输入或读取列表</small></span>
+                  <span class="model-field">
+                    <input name="modelA" list="modelsA" autocomplete="off" placeholder="例如：gpt-4o-mini" />
+                    <button class="load-models" type="button" data-endpoint="a">读取</button>
+                  </span>
+                  <datalist id="modelsA"></datalist>
+                </label>
+                <p class="field-note" id="endpointAStatus">Key 不会保存在历史记录或浏览器存储中。</p>
+              </fieldset>
+
+              <div class="versus-badge" id="versusBadge" aria-hidden="true"><span>VS</span></div>
+
+              <fieldset class="endpoint-card endpoint-b hidden" data-endpoint="b" id="endpointBCard">
+                <legend><span>B</span><b>对比端点</b></legend>
+                <label>
+                  <span>端点标签 <small>仅用于标记结果</small></span>
+                  <input name="labelB" autocomplete="off" placeholder="例如：供应商中转端点" />
+                </label>
+                <label>
+                  <span>模型 URL <small>Base URL 或 /chat/completions</small></span>
+                  <input name="urlB" type="url" autocomplete="url" placeholder="https://gateway.example.com/v1" />
+                </label>
+                <label>
+                  <span>API Key <small>只在本次请求中使用</small></span>
+                  <span class="secret-field">
+                    <input name="keyB" type="password" autocomplete="off" placeholder="sk-••••••••••••" />
+                    <button type="button" class="reveal-secret" data-for="keyB" aria-label="显示或隐藏 API Key">显示</button>
+                  </span>
+                </label>
+                <label>
+                  <span>模型 ID <small>可手动输入或读取列表</small></span>
+                  <span class="model-field">
+                    <input name="modelB" list="modelsB" autocomplete="off" placeholder="例如：claude-sonnet" />
+                    <button class="load-models" type="button" data-endpoint="b">读取</button>
+                  </span>
+                  <datalist id="modelsB"></datalist>
+                </label>
+                <p class="field-note" id="endpointBStatus">两个端点将使用完全相同的探针与采样次数。</p>
+              </fieldset>
+
+              <fieldset class="endpoint-card history-picker hidden" id="historyPicker">
+                <legend><span>H</span><b>历史基线</b></legend>
+                <label>
+                  <span>选择历史指纹</span>
+                  <select id="historySelect" name="historyId">
+                    <option value="">请选择一条历史记录</option>
+                  </select>
+                </label>
+                <div class="history-preview" id="historyPreview">
+                  <div class="empty-orbit"><span>H</span></div>
+                  <p>选择一条历史结果后，这里会显示它的采样规模与指纹摘要。</p>
+                </div>
+                <button class="secondary-button compact" type="button" id="jumpHistory">浏览历史库</button>
+              </fieldset>
+            </div>
+
+            <div class="config-panel">
+              <div class="config-head">
+                <div>
+                  <span class="config-index">EXPERIMENT CONFIG</span>
+                  <h3>采样规格</h3>
+                </div>
+                <div class="request-estimate"><span id="requestCount">160</span><small>预计请求 / 每端点</small></div>
+              </div>
+
+              <div class="preset-list" role="radiogroup" aria-label="采样预设">
+                <label class="preset-card">
+                  <input type="radio" name="preset" value="quick" />
+                  <span><b>快速扫描</b><small>4 维 × 10 次 · 最低分布样本</small></span>
+                </label>
+                <label class="preset-card selected">
+                  <input type="radio" name="preset" value="standard" checked />
+                  <span><b>标准指纹</b><small>8 维 × 20 次 · 推荐</small></span>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="preset" value="deep" />
+                  <span><b>深度采样</b><small>9 固定维度 × 30 次 · 统计更稳</small></span>
+                </label>
+              </div>
+
+              <label class="sample-count-control" for="samplesPerProbe">
+                <span><b>每个探针采样次数</b><small>最少 10 次；可自定义 10–100 次。修改后进入自定义规格。</small></span>
+                <span class="sample-input-wrap"><input id="samplesPerProbe" type="number" min="10" max="100" step="1" value="20" /><i>次</i></span>
+              </label>
+
+              <div class="probe-picker">
+                <div class="probe-head">
+                  <div><b>本次探针</b><small>每个样本都是一次独立请求，只包含当前单条 user 消息</small></div>
+                  <span id="probeCount">8 / 10</span>
+                </div>
+                <div class="probe-grid" id="probeGrid"></div>
+                <div class="custom-probe-builder" id="customProbeBuilder">
+                  <div class="custom-probe-head">
+                    <div><span>USER-DEFINED PROBE</span><b>自定义随机 Prompt</b><small>候选答案决定如何把模型回复归一成概率分布。</small></div>
+                    <label class="custom-probe-toggle"><input id="enableCustomProbe" type="checkbox" /><span>加入本次实验</span></label>
+                  </div>
+                  <div class="custom-probe-fields hidden" id="customProbeFields">
+                    <label><span>探针名称</span><input id="customProbeLabel" maxlength="40" placeholder="例如：随机饮品" /></label>
+                    <label class="custom-prompt-field"><span>普通用户 Prompt</span><textarea id="customProbePrompt" maxlength="600" rows="3" placeholder="Choose one drink from this list: tea, coffee, water. Return only one listed word."></textarea></label>
+                    <label class="custom-options-field"><span>候选答案 <small>每行一个，至少 3 个</small></span><textarea id="customProbeOptions" rows="5" placeholder="tea&#10;coffee&#10;water"></textarea></label>
+                  </div>
+                  <p class="custom-probe-error" id="customProbeError" role="alert"></p>
+                </div>
+              </div>
+
+              <div class="consent-row">
+                <label class="consent">
+                  <input id="saveHistory" type="checkbox" checked />
+                  <span><b>完成后存入本地历史库</b><small>仅保存统计结果与脱敏端点信息，不保存 Key。</small></span>
+                </label>
+                <button class="run-button" id="runExperiment" type="submit">
+                  <span class="button-signal" aria-hidden="true"></span>
+                  <b id="runLabel">生成行为指纹</b>
+                  <small id="runSubLabel">预计 160 次模型请求</small>
+                </button>
+              </div>
+              <p class="form-error" id="formError" role="alert"></p>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="run-console hidden" id="runConsole" aria-live="polite">
+        <div class="console-head">
+          <div>
+            <p class="eyebrow"><span></span> LIVE SAMPLING</p>
+            <h2 id="consoleTitle">正在采集行为信号</h2>
+          </div>
+          <button id="cancelRun" type="button">终止实验</button>
+        </div>
+        <div class="progress-track"><span id="progressBar"></span></div>
+        <div class="console-stats">
+          <div><span>当前端点</span><b id="activeEndpoint">A</b></div>
+          <div><span>进度</span><b id="progressText">0 / 0</b></div>
+          <div><span>有效解析</span><b id="validText">0</b></div>
+          <div><span>实时峰值</span><b id="livePeak">—</b></div>
+        </div>
+        <div class="live-grid" id="liveGrid"></div>
+        <div class="event-log" id="eventLog"></div>
+      </section>
+
+      <section class="results hidden" id="results">
+        <div class="section-heading result-heading">
+          <div>
+            <p class="eyebrow"><span></span> RESULT ARCHIVE</p>
+            <h2 id="resultTitle">行为指纹已生成</h2>
+          </div>
+          <div class="result-actions">
+            <button class="secondary-button" id="exportResult" type="button">导出 JSON</button>
+            <button class="primary-button small" id="newExperiment" type="button">新建实验 <span>+</span></button>
+          </div>
+        </div>
+        <div id="resultContent"></div>
+      </section>
+
+      <section class="history-section reveal" id="history">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow"><span></span> LOCAL REFERENCE VAULT</p>
+            <h2>历史指纹库</h2>
+          </div>
+          <div class="history-tools">
+            <span id="historyCount">0 条记录</span>
+            <button id="clearHistory" type="button">清空历史</button>
+          </div>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </section>
+
+      <section class="disclaimer reveal">
+        <span>STATISTICAL NOTE</span>
+        <p>
+          行为指纹衡量的是特定题面、参数和时间窗口下的输出分布相似性。采样温度、系统提示、供应商路由和模型更新都会改变结果；它适合作为审计线索，不应被当作模型身份的单一法律证明。
+        </p>
+      </section>
+
+      <section class="references-section reveal" id="references">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow"><span></span> REFERENCES</p>
+            <h2>方法来源与延伸阅读</h2>
+          </div>
+          <p>本项目是独立实现，引用以下论文与中文科普文章帮助说明行为指纹方法。</p>
+        </div>
+        <div class="reference-list">
+          <a class="reference-card" href="https://arxiv.org/abs/2607.10252" target="_blank" rel="noreferrer">
+            <span>01 / PAPER</span>
+            <h3>One Token Is Enough</h3>
+            <p>Tomas Bruckner. “One Token Is Enough: Fingerprinting and Verifying Large Language Models from Single-Token Output Distributions.” arXiv:2607.10252, 2026.</p>
+            <b>阅读论文 ↗</b>
+          </a>
+          <a class="reference-card" href="https://mp.weixin.qq.com/s/pqFZreEZj8kB4KDirl4MSQ" target="_blank" rel="noreferrer">
+            <span>02 / ARTICLE</span>
+            <h3>AI说不出的随机数，成了鉴别套壳大模型最好的照妖镜。</h3>
+            <p>数字生命卡兹克，微信公众号文章，2026 年 7 月 21 日。</p>
+            <b>阅读原文 ↗</b>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <span><strong>MODEL TRACE</strong><small>ONE TOKEN LEAVES A TRACE.</small></span>
+      </div>
+      <p>所有实验数据默认保留在当前浏览器。API Key 从不持久化。</p>
+    </footer>
+
+    <dialog id="methodDialog">
+      <button class="dialog-close" type="button" aria-label="关闭">×</button>
+      <p class="eyebrow"><span></span> METHOD NOTE</p>
+      <h2>它比较的不是答案，<br />而是答案背后的分布。</h2>
+      <div class="dialog-copy">
+        <p>实验对数字、颜色、动物、城市等固定选择题，或你定义的候选答案 Prompt 重复采样。每个样本都是一次没有历史上下文的独立请求，每个维度最终形成一个离散概率分布。</p>
+        <p>两个指纹的每个共同维度使用 Jensen–Shannon 距离比较，再取平均得到总体距离。页面同时把共同维度覆盖率、样本量和有效率折算为“采样置信度”。</p>
+        <p>距离越小，行为分布越接近；但“接近”仍可能来自模型家族、相同训练来源、路由策略或样本不足，因此结果只表达统计相似性。</p>
+      </div>
+      <div class="formula">D<sub>JS</sub>(P,Q) = √ ½KL(P∥M) + ½KL(Q∥M)</div>
+    </dialog>
+
+    <template id="emptyHistoryTemplate">
+      <div class="empty-history">
+        <div class="empty-orbit"><span>Ø</span></div>
+        <h3>还没有留存的行为痕迹</h3>
+        <p>完成一次实验后，结果会出现在这里，并可直接作为下一次对比的历史基线。</p>
+        <a href="#workspace">创建第一枚指纹 →</a>
+      </div>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

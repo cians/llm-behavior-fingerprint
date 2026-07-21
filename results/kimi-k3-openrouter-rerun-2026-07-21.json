@@ -1,0 +1,84 @@
+{
+  "generatedAt": "2026-07-21T22:49:27+08:00",
+  "provider": "OpenRouter",
+  "model": "moonshotai/kimi-k3",
+  "protocol": {
+    "systemPrompt": false,
+    "statelessRequests": true,
+    "temperature": 1,
+    "samplesPerProbe": 10,
+    "probeIds": ["number", "color", "animal", "city"]
+  },
+  "requests": 40,
+  "valid": 40,
+  "validRate": 1,
+  "signature": "796971CB",
+  "signatureVersion": 2,
+  "biasStrength": 0.8069054919783651,
+  "comparison": {
+    "baselineFile": "kimi-k3-openrouter-2026-07-21.json",
+    "baselineSignature": "B960FC89",
+    "distance": 0.35304951574073684,
+    "similarity": 0.6469504842592632,
+    "confidence": 0.5773502691896257,
+    "coverage": 1,
+    "verdict": "行为相似",
+    "dimensions": [
+      { "id": "number", "distance": 0.5570819551699948, "dominantNew": "47", "dominantOld": "47", "dominanceNew": 0.8, "dominanceOld": 0.6 },
+      { "id": "color", "distance": 0.43854228558257957, "dominantNew": "green", "dominantOld": "purple", "dominanceNew": 0.8, "dominanceOld": 0.4 },
+      { "id": "animal", "distance": 0.416573822210373, "dominantNew": "fox", "dominantOld": "dolphin", "dominanceNew": 0.8, "dominanceOld": 0.4 },
+      { "id": "city", "distance": 0, "dominantNew": "Tokyo", "dominantOld": "Tokyo", "dominanceNew": 1, "dominanceOld": 1 }
+    ]
+  },
+  "dimensions": [
+    {
+      "id": "number",
+      "total": 10,
+      "valid": 10,
+      "entropyBits": 0.922,
+      "dominant": "47",
+      "dominance": 0.8,
+      "distribution": [
+        { "value": "47", "count": 8, "share": 0.8 },
+        { "value": "42", "count": 1, "share": 0.1 },
+        { "value": "58", "count": 1, "share": 0.1 }
+      ]
+    },
+    {
+      "id": "color",
+      "total": 10,
+      "valid": 10,
+      "entropyBits": 0.922,
+      "dominant": "green",
+      "dominance": 0.8,
+      "distribution": [
+        { "value": "green", "count": 8, "share": 0.8 },
+        { "value": "blue", "count": 1, "share": 0.1 },
+        { "value": "purple", "count": 1, "share": 0.1 }
+      ]
+    },
+    {
+      "id": "animal",
+      "total": 10,
+      "valid": 10,
+      "entropyBits": 0.722,
+      "dominant": "fox",
+      "dominance": 0.8,
+      "distribution": [
+        { "value": "fox", "count": 8, "share": 0.8 },
+        { "value": "dolphin", "count": 2, "share": 0.2 }
+      ]
+    },
+    {
+      "id": "city",
+      "total": 10,
+      "valid": 10,
+      "entropyBits": 0,
+      "dominant": "Tokyo",
+      "dominance": 1,
+      "distribution": [
+        { "value": "Tokyo", "count": 10, "share": 1 }
+      ]
+    }
+  ]
+}
