@@ -8,6 +8,7 @@ import {
   buildFingerprint,
   compareFingerprints,
   createCustomProbe,
+  extractImportableHistoryRecords,
   getProbe,
   jensenShannonDistance,
   parseProbeAnswer
@@ -224,6 +225,28 @@ test("different custom definitions are not treated as the same dimension", () =>
   const first = createCustomProbe({ label: "饮品", prompt: "Choose tea, coffee, or water.", options: ["tea", "coffee", "water"] });
   const second = createCustomProbe({ label: "天气", prompt: "Choose sun, rain, or snow.", options: ["sun", "rain", "snow"] });
   assert.notEqual(first.id, second.id);
+});
+
+test("exported single and comparison results can be converted into local history records", () => {
+  const fingerprintA = buildFingerprint({ probeIds: ["color"], samples: { color: ["blue", "blue", "red"] } });
+  const fingerprintB = buildFingerprint({ probeIds: ["color"], samples: { color: ["red", "red", "blue"] } });
+  const payload = {
+    type: "comparison",
+    experiment: { probeIds: ["color"], samplesPerProbe: 10, concurrency: 4 },
+    left: { endpoint: { label: "Alpha", protocol: "openai", url: "https://alpha.example/v1", model: "alpha", key: "must-not-be-imported" }, fingerprint: fingerprintA, concurrency: 4 },
+    right: { endpoint: { label: "Beta", protocol: "anthropic", url: "https://beta.example/v1", model: "beta" }, fingerprint: fingerprintB, concurrency: 2 }
+  };
+  const records = extractImportableHistoryRecords(payload);
+  assert.equal(records.length, 2);
+  assert.deepEqual(records.map((record) => record.label), ["Alpha", "Beta"]);
+  assert.deepEqual(records.map((record) => record.protocol), ["openai", "anthropic"]);
+  assert.deepEqual(records.map((record) => record.probeIds), [["color"], ["color"]]);
+  assert.deepEqual(records.map((record) => record.fingerprint.signature), [fingerprintA.signature, fingerprintB.signature]);
+  assert.equal("key" in records[0], false);
+});
+
+test("history import rejects incomplete fingerprint data", () => {
+  assert.deepEqual(extractImportableHistoryRecords({ type: "single", run: { endpoint: { label: "bad" }, fingerprint: {} } }), []);
 });
 
 test("sampling presets produce real distributions and allow larger custom runs", () => {

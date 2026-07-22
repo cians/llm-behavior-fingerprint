@@ -6,12 +6,14 @@ import {
   buildFingerprint,
   compareFingerprints,
   createCustomProbe,
+  extractImportableHistoryRecords,
   formatPercent,
   getProbe
 } from "./core.js";
 
 const STORAGE_KEY = "model-trace-history-v1";
 const MAX_HISTORY = 30;
+const MAX_HISTORY_IMPORT_BYTES = 2 * 1024 * 1024;
 const CONCURRENCY_LIMITS = { min: 1, max: 10, default: 4 };
 const BASE_TITLE = document.title;
 const TAB_FRAMES = ["◐", "◓", "◑", "◒"];
@@ -37,6 +39,7 @@ const PROTOCOL_UI = {
 const state = {
   mode: "single",
   preset: "standard",
+  historyCompareSource: "endpoint",
   probeIds: new Set(PRESETS.standard.probeIds),
   samplesPerProbe: PRESETS.standard.samplesPerProbe,
   concurrency: CONCURRENCY_LIMITS.default,
@@ -53,10 +56,16 @@ const state = {
 const elements = {
   form: document.querySelector("#experimentForm"),
   endpointGrid: document.querySelector("#endpointGrid"),
+  endpointACard: document.querySelector("#endpointACard"),
   endpointBCard: document.querySelector("#endpointBCard"),
   historyPicker: document.querySelector("#historyPicker"),
+  historyEndpointSource: document.querySelector("#historyEndpointSource"),
+  historyPairSource: document.querySelector("#historyPairSource"),
   historySelect: document.querySelector("#historySelect"),
+  historySelectA: document.querySelector("#historySelectA"),
+  historySelectB: document.querySelector("#historySelectB"),
   historyPreview: document.querySelector("#historyPreview"),
+  historyPairPreview: document.querySelector("#historyPairPreview"),
   probeGrid: document.querySelector("#probeGrid"),
   requestCount: document.querySelector("#requestCount"),
   probeCount: document.querySelector("#probeCount"),
@@ -79,6 +88,9 @@ const elements = {
   resultContent: document.querySelector("#resultContent"),
   historyList: document.querySelector("#historyList"),
   historyCount: document.querySelector("#historyCount"),
+  importHistory: document.querySelector("#importHistory"),
+  importHistoryFile: document.querySelector("#importHistoryFile"),
+  historyImportStatus: document.querySelector("#historyImportStatus"),
   clearHistory: document.querySelector("#clearHistory"),
   methodDialog: document.querySelector("#methodDialog"),
   enableCustomProbe: document.querySelector("#enableCustomProbe"),
@@ -90,6 +102,7 @@ const elements = {
 };
 elements.samplesPerProbe = document.querySelector("#samplesPerProbe");
 elements.requestConcurrency = document.querySelector("#requestConcurrency");
+elements.historyCompareSource = document.querySelectorAll('input[name="historyCompareSource"]');
 
 const favicon = document.querySelector('link[rel~="icon"]') ?? document.createElement("link");
 favicon.rel = "icon";
@@ -225,16 +238,40 @@ function renderProbes() {
 }
 
 function updateEstimate() {
+  const historyPair = isHistoryPairMode();
   const perEndpoint = state.probeIds.size * state.samplesPerProbe;
-  const total = perEndpoint * (state.mode === "dual" ? 2 : 1);
-  elements.requestCount.textContent = String(perEndpoint);
+  const total = historyPair ? 0 : perEndpoint * (state.mode === "dual" ? 2 : 1);
+  elements.requestCount.textContent = String(historyPair ? 0 : perEndpoint);
   elements.probeCount.textContent = `${state.probeIds.size} / ${TOTAL_PROBE_SLOTS}`;
   const labels = {
     single: ["生成行为指纹", `预计 ${total} 次请求 · ${state.concurrency} 路并发`],
     dual: ["扫描并对比", `预计共 ${total} 次请求 · ${state.concurrency} 路并发`],
-    history: ["与历史指纹对比", `预计 ${total} 次请求 · ${state.concurrency} 路并发`]
+    history: historyPair
+      ? ["对比两条历史指纹", "直接读取本地结果 · 不发起模型请求"]
+      : ["与历史指纹对比", `预计 ${total} 次请求 · ${state.concurrency} 路并发`]
   };
   [elements.runLabel.textContent, elements.runSubLabel.textContent] = labels[state.mode];
+}
+
+function isHistoryPairMode() {
+  return state.mode === "history" && state.historyCompareSource === "pair";
+}
+
+function syncModeLayout() {
+  const dual = state.mode === "dual";
+  const history = state.mode === "history";
+  const historyPair = isHistoryPairMode();
+  elements.endpointGrid.classList.toggle("dual", dual || (history && !historyPair));
+  elements.endpointACard.classList.toggle("hidden", historyPair);
+  elements.endpointBCard.classList.toggle("hidden", !dual);
+  elements.historyPicker.classList.toggle("hidden", !history);
+  elements.historyEndpointSource.classList.toggle("hidden", historyPair);
+  elements.historyPairSource.classList.toggle("hidden", !historyPair);
+  elements.form.classList.toggle("history-pair-mode", historyPair);
+  elements.form.elements.urlA.required = !historyPair;
+  elements.form.elements.urlB.required = dual;
+  document.querySelector("#endpointATitle").textContent = history ? "新采样端点" : "待测端点";
+  elements.historyCompareSource.forEach((input) => { input.checked = input.value === state.historyCompareSource; });
 }
 
 function switchMode(mode) {
@@ -245,13 +282,14 @@ function switchMode(mode) {
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   });
-  const dual = mode === "dual";
-  const history = mode === "history";
-  elements.endpointGrid.classList.toggle("dual", dual || history);
-  elements.endpointBCard.classList.toggle("hidden", !dual);
-  elements.historyPicker.classList.toggle("hidden", !history);
-  elements.form.elements.urlB.required = dual;
-  document.querySelector("#endpointATitle").textContent = history ? "新采样端点" : "待测端点";
+  syncModeLayout();
+  updateEstimate();
+}
+
+function setHistoryCompareSource(source) {
+  state.historyCompareSource = source === "pair" ? "pair" : "endpoint";
+  syncModeLayout();
+  renderHistorySelect();
   updateEstimate();
 }
 
@@ -274,16 +312,30 @@ function applyPreset(presetId) {
 }
 
 function renderHistorySelect() {
-  const current = elements.historySelect.value;
-  elements.historySelect.innerHTML = `<option value="">请选择一条历史记录</option>${state.histories
-    .map((history) => `<option value="${escapeHtml(history.id)}">${escapeHtml(history.label)} · ${escapeHtml(history.fingerprint.signature)}</option>`)
-    .join("")}`;
-  if (state.histories.some((history) => history.id === current)) elements.historySelect.value = current;
+  const ids = new Set(state.histories.map((history) => history.id));
+  const baselineId = ids.has(elements.historySelect.value) ? elements.historySelect.value : "";
+  const firstId = ids.has(elements.historySelectA.value) ? elements.historySelectA.value : state.histories[0]?.id ?? "";
+  const secondCandidates = state.histories.filter((history) => history.id !== firstId);
+  const secondIds = new Set(secondCandidates.map((history) => history.id));
+  const secondId = secondIds.has(elements.historySelectB.value) ? elements.historySelectB.value : secondCandidates[0]?.id ?? "";
+  const option = (history) => `<option value="${escapeHtml(history.id)}">${escapeHtml(formatDate(history.createdAt))} · ${escapeHtml(history.label)} · ${escapeHtml(history.fingerprint.signature)}</option>`;
+
+  elements.historySelect.innerHTML = `<option value="">请选择一条历史记录</option>${state.histories.map(option).join("")}`;
+  elements.historySelect.value = baselineId;
+  elements.historySelectA.innerHTML = `<option value="">请选择第一条记录</option>${state.histories.map(option).join("")}`;
+  elements.historySelectA.value = firstId;
+  elements.historySelectB.innerHTML = `<option value="">${state.histories.length < 2 ? "还需另一条历史记录" : "请选择第二条记录"}</option>${secondCandidates.map(option).join("")}`;
+  elements.historySelectB.value = secondId;
   renderHistoryPreview();
+  renderHistoryPairPreview();
+}
+
+function historyById(id) {
+  return state.histories.find((history) => history.id === id);
 }
 
 function renderHistoryPreview() {
-  const history = state.histories.find((item) => item.id === elements.historySelect.value);
+  const history = historyById(elements.historySelect.value);
   if (!history) {
     elements.historyPreview.innerHTML = `<div class="empty-orbit"><span>H</span></div><p>选择一条历史结果后，这里会显示它的采样规模与指纹摘要。</p>`;
     return;
@@ -293,6 +345,28 @@ function renderHistoryPreview() {
     <strong>${escapeHtml(history.fingerprint.signature)}</strong>
     <div class="preview-meta"><span class="protocol-badge ${history.protocol}">${PROTOCOL_LABELS[history.protocol]}</span>${escapeHtml(history.label)} · ${history.fingerprint.dimensions.length} 维 · ${history.fingerprint.valid} 个有效样本 · ${history.concurrency || CONCURRENCY_LIMITS.default} 路</div>
     <p>${escapeHtml(history.model || "未指定模型 ID")}<br>${escapeHtml(history.url || "未记录端点")}${history.customProbe ? `<br>自定义探针：${escapeHtml(history.customProbe.label)}` : ""}</p>
+  `;
+}
+
+function renderHistoryPairPreview() {
+  const first = historyById(elements.historySelectA.value);
+  const second = historyById(elements.historySelectB.value);
+  if (!first || !second) {
+    elements.historyPairPreview.innerHTML = `<p>选择两条不同的历史结果后，将直接计算它们的分布距离。</p>`;
+    return;
+  }
+  const comparison = compareFingerprints(first.fingerprint, second.fingerprint);
+  const card = (history, marker) => `
+    <article class="history-pair-card">
+      <span>${marker} · ${escapeHtml(PROTOCOL_LABELS[history.protocol] || "OpenAI")}</span>
+      <strong>${escapeHtml(history.fingerprint.signature)}</strong>
+      <b>${escapeHtml(history.label)}</b>
+      <small>${history.fingerprint.dimensions.length} 维 · ${history.fingerprint.valid} 个有效样本</small>
+    </article>`;
+  elements.historyPairPreview.innerHTML = `
+    ${card(first, "H1")}
+    ${card(second, "H2")}
+    <p class="history-pair-coverage">${comparison.dimensions.length ? `共同可比维度 ${comparison.dimensions.length} 个 · 可直接计算距离` : "没有共同可比维度，无法形成可靠对比"}</p>
   `;
 }
 
@@ -390,6 +464,16 @@ function updateProtocolUi(suffix) {
 
 function validateExperiment() {
   elements.formError.textContent = "";
+  if (isHistoryPairMode()) {
+    const first = historyById(elements.historySelectA.value);
+    const second = historyById(elements.historySelectB.value);
+    if (!first || !second) return "请选择两条已完成的历史指纹。";
+    if (first.id === second.id) return "请选择两条不同的历史指纹。";
+    if (!compareFingerprints(first.fingerprint, second.fingerprint).dimensions.length) {
+      return "两条历史指纹没有共同可比维度，无法直接对比。";
+    }
+    return "";
+  }
   if (elements.enableCustomProbe.checked && !updateCustomProbe({ showError: true })) {
     return "请完善自定义随机 Prompt。";
   }
@@ -551,6 +635,47 @@ function saveRunHistory(run) {
   return record;
 }
 
+function setHistoryImportStatus(message = "", tone = "") {
+  elements.historyImportStatus.textContent = message;
+  elements.historyImportStatus.className = `history-import-status${tone ? ` ${tone}` : ""}`;
+}
+
+function addImportedHistories(records) {
+  const existing = new Set(state.histories.map((history) => `${history.fingerprint.signature}\u0000${history.label}\u0000${history.model}\u0000${history.url}`));
+  const fresh = records
+    .map((record) => ({ ...record, id: uid(), createdAt: record.createdAt ?? Date.now() }))
+    .filter((record) => {
+      const identity = `${record.fingerprint.signature}\u0000${record.label}\u0000${record.model}\u0000${record.url}`;
+      if (existing.has(identity)) return false;
+      existing.add(identity);
+      return true;
+    });
+  if (!fresh.length) return 0;
+  state.histories = [...fresh.reverse(), ...state.histories].slice(0, MAX_HISTORY);
+  persistHistories();
+  renderHistory();
+  return fresh.length;
+}
+
+async function importHistoryFile(file) {
+  if (!file) return;
+  if (file.size > MAX_HISTORY_IMPORT_BYTES) {
+    setHistoryImportStatus("导入文件不能超过 2 MB。", "error");
+    return;
+  }
+  try {
+    const payload = JSON.parse(await file.text());
+    const records = extractImportableHistoryRecords(payload);
+    if (!records.length) throw new Error("未识别到可导入的行为指纹 JSON。");
+    const added = addImportedHistories(records);
+    setHistoryImportStatus(added ? `已导入 ${added} 条历史指纹。` : "文件中的指纹已存在，无需重复导入。", added ? "success" : "");
+  } catch (error) {
+    setHistoryImportStatus(error.message || "导入失败，请检查 JSON 文件。", "error");
+  } finally {
+    elements.importHistoryFile.value = "";
+  }
+}
+
 function summaryStats(fingerprint) {
   return `
     <div class="summary-stats">
@@ -609,12 +734,12 @@ function runConcurrency(run) {
   return run.concurrency || CONCURRENCY_LIMITS.default;
 }
 
-function renderComparisonResult(left, right, comparison, sourceLabel = "实时端点") {
+function renderComparisonResult(left, right, comparison, { leftMarker = "A", rightMarker = "B" } = {}) {
   elements.resultTitle.textContent = "行为指纹对比完成";
   elements.resultContent.innerHTML = `
     <div class="comparison-hero">
       <article class="compare-model">
-        <div class="model-letter">A</div>
+        <div class="model-letter">${escapeHtml(leftMarker)}</div>
         <h3>${escapeHtml(left.endpoint.label)}</h3>
         <p><span class="protocol-badge ${left.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[left.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(left.endpoint.model || "未指定模型 ID")} · ${runConcurrency(left)} 路并发<br>${escapeHtml(sanitizeUrl(left.endpoint.url))}</p>
         <div class="compare-hash">${escapeHtml(left.fingerprint.signature)}</div>
@@ -625,7 +750,7 @@ function renderComparisonResult(left, right, comparison, sourceLabel = "实时�
         <p>距离 ${comparison.distance.toFixed(3)} · 采样置信度 ${formatPercent(comparison.confidence)}</p>
       </div>
       <article class="compare-model right">
-        <div class="model-letter">${sourceLabel === "历史基线" ? "H" : "B"}</div>
+        <div class="model-letter">${escapeHtml(rightMarker)}</div>
         <h3>${escapeHtml(right.endpoint.label)}</h3>
         <p><span class="protocol-badge ${right.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[right.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(right.endpoint.model || "未指定模型 ID")} · ${runConcurrency(right)} 路并发<br>${escapeHtml(sanitizeUrl(right.endpoint.url))}</p>
         <div class="compare-hash">${escapeHtml(right.fingerprint.signature)}</div>
@@ -647,9 +772,26 @@ function historyAsRun(history) {
   return {
     endpoint: { label: history.label, protocol: history.protocol || "openai", url: history.url, model: history.model },
     concurrency: history.concurrency || CONCURRENCY_LIMITS.default,
+    preset: history.preset,
+    samplesPerProbe: history.samplesPerProbe,
+    probeIds: history.probeIds,
+    customProbe: history.customProbe,
+    createdAt: history.createdAt,
     fingerprint: history.fingerprint,
     samples: {}
   };
+}
+
+function compareSelectedHistoryPair() {
+  const first = historyById(elements.historySelectA.value);
+  const second = historyById(elements.historySelectB.value);
+  const left = historyAsRun(first);
+  const right = historyAsRun(second);
+  const comparison = compareFingerprints(first.fingerprint, second.fingerprint);
+  state.latestResult = { type: "comparison", left, right, comparison, historyIds: [first.id, second.id], source: "history-pair" };
+  renderComparisonResult(left, right, comparison, { leftMarker: "H1", rightMarker: "H2" });
+  elements.results.classList.remove("hidden");
+  elements.results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function runExperiment(event) {
@@ -657,6 +799,10 @@ async function runExperiment(event) {
   const validationError = validateExperiment();
   if (validationError) {
     elements.formError.textContent = validationError;
+    return;
+  }
+  if (isHistoryPairMode()) {
+    compareSelectedHistoryPair();
     return;
   }
 
@@ -693,7 +839,7 @@ async function runExperiment(event) {
       const historyRun = historyAsRun(history);
       const comparison = compareFingerprints(runA.fingerprint, history.fingerprint);
       state.latestResult = { type: "comparison", left: runA, right: historyRun, comparison, historyId: history.id };
-      renderComparisonResult(runA, historyRun, comparison, "历史基线");
+      renderComparisonResult(runA, historyRun, comparison, { rightMarker: "H" });
     }
 
     elements.progressBar.style.width = "100%";
@@ -755,6 +901,14 @@ async function loadModels(suffix) {
 function exportLatestResult() {
   if (!state.latestResult) return;
   const clean = JSON.parse(JSON.stringify(state.latestResult));
+  clean.exportVersion = 1;
+  clean.experiment = {
+    preset: state.preset,
+    probeIds: [...state.probeIds],
+    samplesPerProbe: state.samplesPerProbe,
+    concurrency: state.concurrency,
+    customProbe: state.customProbe
+  };
   const stripKey = (run) => { if (run?.endpoint) delete run.endpoint.key; };
   stripKey(clean.run);
   stripKey(clean.left);
@@ -777,6 +931,7 @@ function showHistory(history) {
 
 function compareFromHistory(history) {
   switchMode("history");
+  setHistoryCompareSource("endpoint");
   elements.historySelect.value = history.id;
   syncExperimentToHistory(history);
   renderHistoryPreview();
@@ -837,10 +992,13 @@ document.querySelectorAll(".reveal-secret").forEach((button) => button.addEventL
 document.querySelectorAll(".load-models").forEach((button) => button.addEventListener("click", () => loadModels(button.dataset.endpoint)));
 document.querySelectorAll('input[name^="protocol"]').forEach((input) => input.addEventListener("change", () => updateProtocolUi(input.name.at(-1))));
 elements.historySelect.addEventListener("change", () => {
-  const history = state.histories.find((item) => item.id === elements.historySelect.value);
-  if (state.mode === "history") syncExperimentToHistory(history);
+  const history = historyById(elements.historySelect.value);
+  if (state.mode === "history" && !isHistoryPairMode()) syncExperimentToHistory(history);
   renderHistoryPreview();
 });
+elements.historySelectA.addEventListener("change", renderHistorySelect);
+elements.historySelectB.addEventListener("change", renderHistoryPairPreview);
+elements.historyCompareSource.forEach((input) => input.addEventListener("change", () => setHistoryCompareSource(input.value)));
 elements.form.addEventListener("submit", runExperiment);
 document.querySelector("#cancelRun").addEventListener("click", () => state.abortController?.abort());
 document.querySelector("#exportResult").addEventListener("click", exportLatestResult);
@@ -849,11 +1007,14 @@ document.querySelector("#newExperiment").addEventListener("click", () => {
   document.querySelector("#workspace").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 document.querySelector("#jumpHistory").addEventListener("click", () => document.querySelector("#history").scrollIntoView({ behavior: "smooth" }));
+elements.importHistory.addEventListener("click", () => elements.importHistoryFile.click());
+elements.importHistoryFile.addEventListener("change", () => importHistoryFile(elements.importHistoryFile.files?.[0]));
 elements.clearHistory.addEventListener("click", () => {
   if (!state.histories.length || !confirm("确定删除全部本地历史指纹吗？此操作不可撤销。")) return;
   state.histories = [];
   persistHistories();
   renderHistory();
+  setHistoryImportStatus();
 });
 elements.historyList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");

@@ -37,9 +37,9 @@
       <section class="hero reveal">
         <div class="hero-copy">
           <p class="eyebrow"><span></span> BEHAVIORAL MODEL AUTHENTICATION</p>
-          <h1>每一次“随机”，<br />都在泄露<span>它是谁。</span></h1>
+          <h1>模型的“随机选择”，<br />为何会<span>留下身份线索？</span></h1>
           <p class="hero-lead">
-            单次答案不是证据，重复后的分布才是。用一组不起眼的随机问题，让模型从训练与对齐中继承的稳定选择偏好显形。
+            模型并非真正均匀地随便选：训练、对齐与解码会留下稳定的微弱偏好。单次看似偶然，独立重复后便显形为可比较的概率分布。
           </p>
           <div class="hero-actions">
             <a class="primary-button" href="#workspace">开始采样 <span>→</span></a>
@@ -122,14 +122,14 @@
             <span>02</span><b>双端对比</b><small>扫描并比较两个端点</small>
           </button>
           <button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="history">
-            <span>03</span><b>历史对比</b><small>新端点对历史基线</small>
+            <span>03</span><b>历史对比</b><small>新端点或两条历史指纹</small>
           </button>
         </div>
 
         <div class="workbench">
           <form id="experimentForm" novalidate>
             <div class="endpoint-grid" id="endpointGrid">
-              <fieldset class="endpoint-card" data-endpoint="a">
+              <fieldset class="endpoint-card" data-endpoint="a" id="endpointACard">
                 <legend><span>A</span><b id="endpointATitle">待测端点</b></legend>
                 <label>
                   <span>端点标签 <small>仅用于标记结果</small></span>
@@ -202,16 +202,42 @@
               </fieldset>
 
               <fieldset class="endpoint-card history-picker hidden" id="historyPicker">
-                <legend><span>H</span><b>历史基线</b></legend>
-                <label>
-                  <span>选择历史指纹</span>
-                  <select id="historySelect" name="historyId">
-                    <option value="">请选择一条历史记录</option>
-                  </select>
-                </label>
-                <div class="history-preview" id="historyPreview">
-                  <div class="empty-orbit"><span>H</span></div>
-                  <p>选择一条历史结果后，这里会显示它的采样规模与指纹摘要。</p>
+                <legend><span>H</span><b>历史对比</b></legend>
+                <div class="history-compare-source" role="radiogroup" aria-label="历史对比来源">
+                  <label><input type="radio" name="historyCompareSource" value="endpoint" checked /><span>新端点 + 历史</span></label>
+                  <label><input type="radio" name="historyCompareSource" value="pair" /><span>两条历史指纹</span></label>
+                </div>
+                <div id="historyEndpointSource">
+                  <label>
+                    <span>选择历史基线</span>
+                    <select id="historySelect" name="historyId">
+                      <option value="">请选择一条历史记录</option>
+                    </select>
+                  </label>
+                  <div class="history-preview" id="historyPreview">
+                    <div class="empty-orbit"><span>H</span></div>
+                    <p>选择一条历史结果后，这里会显示它的采样规模与指纹摘要。</p>
+                  </div>
+                </div>
+                <div class="history-pair-source hidden" id="historyPairSource">
+                  <div class="history-pair-selects">
+                    <label>
+                      <span>H1 · 第一条历史指纹</span>
+                      <select id="historySelectA" name="historyIdA">
+                        <option value="">请选择第一条记录</option>
+                      </select>
+                    </label>
+                    <div class="history-pair-vs" aria-hidden="true">VS</div>
+                    <label>
+                      <span>H2 · 第二条历史指纹</span>
+                      <select id="historySelectB" name="historyIdB">
+                        <option value="">请选择第二条记录</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="history-pair-preview" id="historyPairPreview" aria-live="polite">
+                    <p>选择两条不同的历史结果后，将直接计算它们的分布距离。</p>
+                  </div>
                 </div>
                 <button class="secondary-button compact" type="button" id="jumpHistory">浏览历史库</button>
               </fieldset>
@@ -329,9 +355,12 @@
           </div>
           <div class="history-tools">
             <span id="historyCount">0 条记录</span>
+            <button id="importHistory" type="button">导入 JSON</button>
             <button id="clearHistory" type="button">清空历史</button>
           </div>
         </div>
+        <input id="importHistoryFile" type="file" accept="application/json,.json" class="hidden" />
+        <p class="history-import-status" id="historyImportStatus" role="status" aria-live="polite"></p>
         <div class="history-list" id="historyList"></div>
       </section>
 

@@ -156,6 +156,80 @@ export function createCustomProbe({ label, prompt, options }) {
   };
 }
 
+function validImportedFingerprint(fingerprint) {
+  return Boolean(
+    fingerprint
+    && typeof fingerprint === "object"
+    && typeof fingerprint.signature === "string"
+    && Array.isArray(fingerprint.dimensions)
+    && fingerprint.dimensions.length
+    && fingerprint.dimensions.every((dimension) => (
+      typeof dimension?.id === "string"
+      && Array.isArray(dimension.options)
+      && dimension.options.length
+      && dimension.counts
+      && typeof dimension.counts === "object"
+      && dimension.options.every((option) => Number.isFinite(Number(dimension.counts[option])))
+    ))
+  );
+}
+
+function importSources(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.histories)) return payload.histories;
+  if (payload.type === "comparison") return [payload.left, payload.right];
+  if (payload.type === "single" || payload.run) return [payload.run];
+  return [payload];
+}
+
+export function extractImportableHistoryRecords(payload) {
+  const experiment = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload.experiment ?? {}
+    : {};
+  const records = [];
+
+  for (const source of importSources(payload)) {
+    if (!source || typeof source !== "object" || !validImportedFingerprint(source.fingerprint)) continue;
+    const endpoint = source.endpoint && typeof source.endpoint === "object" ? source.endpoint : source;
+    const rawCustomProbe = source.customProbe ?? experiment.customProbe;
+    let customProbe = null;
+    if (rawCustomProbe) {
+      try {
+        customProbe = createCustomProbe(rawCustomProbe);
+      } catch {
+        continue;
+      }
+    }
+    const rawProbeIds = Array.isArray(source.probeIds)
+      ? source.probeIds
+      : Array.isArray(experiment.probeIds)
+        ? experiment.probeIds
+        : source.fingerprint.dimensions.map((dimension) => dimension.id);
+    const probeIds = rawProbeIds.filter((probeId) => typeof probeId === "string");
+    const samplesPerProbe = Number.isInteger(source.samplesPerProbe)
+      ? source.samplesPerProbe
+      : Number.isInteger(experiment.samplesPerProbe)
+        ? experiment.samplesPerProbe
+        : null;
+    records.push({
+      createdAt: Number.isFinite(source.createdAt) ? source.createdAt : null,
+      label: String(endpoint.label ?? "导入的行为指纹").trim() || "导入的行为指纹",
+      protocol: endpoint.protocol === "anthropic" ? "anthropic" : "openai",
+      url: String(endpoint.url ?? "").trim(),
+      model: String(endpoint.model ?? "").trim(),
+      preset: typeof source.preset === "string" ? source.preset : typeof experiment.preset === "string" ? experiment.preset : "imported",
+      samplesPerProbe,
+      concurrency: Number.isInteger(source.concurrency) ? source.concurrency : Number.isInteger(experiment.concurrency) ? experiment.concurrency : null,
+      probeIds,
+      customProbe,
+      fingerprint: source.fingerprint
+    });
+  }
+
+  return records;
+}
+
 function cleanAnswer(raw) {
   return String(raw ?? "")
     .normalize("NFKC")
