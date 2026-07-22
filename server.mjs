@@ -10,6 +10,7 @@ const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY_BYTES = 80 * 1024;
 const MAX_REQUESTS = 1_000;
+const PROTOCOLS = new Set(["openai", "anthropic"]);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -83,6 +84,12 @@ function parseEndpoint(rawUrl) {
   return parsed;
 }
 
+export function normalizeProtocol(value) {
+  const protocol = String(value ?? "openai").trim().toLowerCase();
+  if (!PROTOCOLS.has(protocol)) throw new HttpError(400, "协议仅支持 OpenAI 或 Anthropic");
+  return protocol;
+}
+
 export function buildChatCompletionsUrl(rawUrl) {
   const parsed = parseEndpoint(rawUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
@@ -96,17 +103,39 @@ export function buildChatCompletionsUrl(rawUrl) {
   return parsed;
 }
 
-export function buildModelsUrl(rawUrl) {
-  const parsed = buildChatCompletionsUrl(rawUrl);
-  parsed.pathname = parsed.pathname.replace(/\/chat\/completions$/i, "/models");
+export function buildAnthropicMessagesUrl(rawUrl) {
+  const parsed = parseEndpoint(rawUrl);
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  if (/\/messages$/i.test(pathname)) {
+    parsed.pathname = pathname;
+  } else if (/\/v1$/i.test(pathname)) {
+    parsed.pathname = `${pathname}/messages`;
+  } else {
+    parsed.pathname = `${pathname}/v1/messages`.replace(/\/+/g, "/");
+  }
+  return parsed;
+}
+
+export function buildModelsUrl(rawUrl, protocol = "openai") {
+  const normalized = normalizeProtocol(protocol);
+  const parsed = normalized === "anthropic" ? buildAnthropicMessagesUrl(rawUrl) : buildChatCompletionsUrl(rawUrl);
+  parsed.pathname = normalized === "anthropic"
+    ? parsed.pathname.replace(/\/messages$/i, "/models")
+    : parsed.pathname.replace(/\/chat\/completions$/i, "/models");
   parsed.search = "";
   parsed.hash = "";
   return parsed;
 }
 
-function upstreamHeaders(key) {
+export function upstreamHeaders(key, protocol = "openai") {
+  const normalized = normalizeProtocol(protocol);
   const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  if (String(key ?? "").trim()) headers.Authorization = `Bearer ${String(key).trim()}`;
+  if (normalized === "anthropic") {
+    headers["anthropic-version"] = "2023-06-01";
+    if (String(key ?? "").trim()) headers["x-api-key"] = String(key).trim();
+  } else if (String(key ?? "").trim()) {
+    headers.Authorization = `Bearer ${String(key).trim()}`;
+  }
   return headers;
 }
 
@@ -136,7 +165,14 @@ async function fetchUpstream(url, options, timeoutMs = 45_000) {
   }
 }
 
-function extractAssistantText(data) {
+export function extractAssistantText(data, protocol = "openai") {
+  if (normalizeProtocol(protocol) === "anthropic") {
+    if (!Array.isArray(data?.content)) return "";
+    return data.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("");
+  }
   const content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.output_text;
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -156,35 +192,42 @@ function unsupportedSamplingParameter(error) {
 }
 
 export function buildProbeRequestBody(endpoint, probe) {
+  normalizeProtocol(endpoint.protocol);
   const body = {
     messages: [{ role: "user", content: probe.prompt }],
-    stream: false
+    stream: false,
+    temperature: 1,
+    max_tokens: 256
   };
   if (String(endpoint.model ?? "").trim()) body.model = String(endpoint.model).trim();
   return body;
 }
 
 async function requestProbe({ endpoint, probe }) {
-  const url = buildChatCompletionsUrl(endpoint.url);
+  const protocol = normalizeProtocol(endpoint.protocol);
+  const url = protocol === "anthropic" ? buildAnthropicMessagesUrl(endpoint.url) : buildChatCompletionsUrl(endpoint.url);
   const baseBody = buildProbeRequestBody(endpoint, probe);
 
   let data;
   try {
     data = await fetchUpstream(url, {
       method: "POST",
-      headers: upstreamHeaders(endpoint.key),
-      body: JSON.stringify({ ...baseBody, temperature: 1, max_tokens: 256 })
+      headers: upstreamHeaders(endpoint.key, protocol),
+      body: JSON.stringify(baseBody)
     });
   } catch (error) {
     if (!unsupportedSamplingParameter(error)) throw error;
+    const { temperature, ...withoutTemperature } = baseBody;
+    const { max_tokens, ...withoutSampling } = withoutTemperature;
+    const fallbackBody = protocol === "anthropic" ? withoutTemperature : withoutSampling;
     data = await fetchUpstream(url, {
       method: "POST",
-      headers: upstreamHeaders(endpoint.key),
-      body: JSON.stringify(baseBody)
+      headers: upstreamHeaders(endpoint.key, protocol),
+      body: JSON.stringify(fallbackBody)
     });
   }
 
-  const raw = extractAssistantText(data).trim();
+  const raw = extractAssistantText(data, protocol).trim();
   if (!raw) throw new HttpError(502, "模型返回了空内容");
   return { raw, value: parseProbeAnswer(probe, raw) };
 }
@@ -200,8 +243,9 @@ function shuffle(items) {
 
 async function handleModels(request, response) {
   const body = await readJsonBody(request);
-  const url = buildModelsUrl(body.url);
-  const data = await fetchUpstream(url, { method: "GET", headers: upstreamHeaders(body.key) }, 20_000);
+  const protocol = normalizeProtocol(body.protocol);
+  const url = buildModelsUrl(body.url, protocol);
+  const data = await fetchUpstream(url, { method: "GET", headers: upstreamHeaders(body.key, protocol) }, 20_000);
   const rawModels = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
   const models = rawModels
     .map((model) => (typeof model === "string" ? model : model?.id ?? model?.name))
@@ -214,6 +258,11 @@ async function handleRun(request, response) {
   const body = await readJsonBody(request);
   const endpoint = body.endpoint ?? {};
   parseEndpoint(endpoint.url);
+  const protocol = normalizeProtocol(endpoint.protocol);
+  endpoint.protocol = protocol;
+  if (protocol === "anthropic" && !String(endpoint.model ?? "").trim()) {
+    throw new HttpError(400, "Anthropic Messages 协议必须填写模型 ID");
+  }
 
   const samplesPerProbe = Number(body.samplesPerProbe);
   if (!Number.isInteger(samplesPerProbe) || samplesPerProbe < SAMPLE_LIMITS.min || samplesPerProbe > SAMPLE_LIMITS.max) {

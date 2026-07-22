@@ -1,6 +1,6 @@
 # LLM Behavior Fingerprint
 
-一个本地优先的大模型行为指纹工具。它会向 OpenAI Chat Completions 兼容端点重复发送一组普通的随机选择问题，统计回答的概率分布，并使用 Jensen–Shannon 距离比较两个模型端点是否表现出相似的行为偏好。
+一个本地优先的大模型行为指纹工具。它会通过 OpenAI Chat Completions 或 Anthropic Messages 协议，向模型端点重复发送一组普通的随机选择问题，统计回答的概率分布，并使用 Jensen–Shannon 距离比较两个模型端点是否表现出相似的行为偏好。
 
 它可以用于：
 
@@ -34,10 +34,16 @@ http://127.0.0.1:4173
 
 ### 1. 填写模型端点
 
-- **模型 URL**：支持 API Base URL、以 `/v1` 结尾的 URL，或完整的 `/chat/completions` URL。
+- **接口协议**：每个端点独立选择 OpenAI Chat Completions 或 Anthropic Messages；双端实验可以跨协议比较。
+- **模型 URL**：支持 API Base URL、以 `/v1` 结尾的 URL，或对应协议的完整接口 URL。
 - **API Key**：该端点使用的凭据。
 - **模型 ID**：例如 `moonshotai/kimi-k3`。如果端点支持 `/models`，可以点击“读取”。
 - **端点标签**：只用于标记本地结果。
+
+| 协议 | 自动识别的输入 | 实际请求 | Key 认证 |
+|---|---|---|---|
+| OpenAI | Base URL、`/v1`、`/chat/completions` | `POST /v1/chat/completions` | `Authorization: Bearer …` |
+| Anthropic | Base URL、`/v1`、`/v1/messages` | `POST /v1/messages` | `x-api-key: …` + `anthropic-version` |
 
 例如 OpenRouter：
 
@@ -45,6 +51,16 @@ http://127.0.0.1:4173
 URL: https://openrouter.ai/api/v1
 Model: moonshotai/kimi-k3
 ```
+
+例如 Anthropic：
+
+```text
+Protocol: Anthropic Messages
+URL: https://api.anthropic.com
+Model: claude-sonnet-4-5
+```
+
+Anthropic Messages 协议要求填写模型 ID。两种协议都尝试通过 `GET /v1/models` 读取模型列表；若供应商未实现模型列表接口，可以直接手动输入。
 
 ### 2. 选择实验模式
 
@@ -96,7 +112,7 @@ water
 - 没有分析 SDK、遥测服务或第三方前端资源；
 - API Key 不写入 LocalStorage、历史记录、导出结果、文件或服务日志；
 - 浏览器只把 Key 发送给本机 `127.0.0.1` 服务；
-- 本机服务只把 Key 作为 `Authorization` 头发送到你在页面中填写的模型 URL；
+- 本机服务只把 Key 发送到你在页面中填写的模型 URL：OpenAI 协议使用 `Authorization: Bearer`，Anthropic 协议使用 `x-api-key`；
 - 历史记录仅保存去掉查询参数的端点 URL、模型 ID、探针定义和统计结果。
 
 因此，Key **不会上传给本项目作者、GitHub 或任何分析服务**。为了真正调用模型，它仍然必须被发送到你所填写的 API 供应商——例如填写 OpenRouter URL 时，Key 会发送给 OpenRouter。
@@ -110,12 +126,12 @@ water
 ## 采样协议
 
 - 请求只包含一条普通 `user` 消息，不附加会透露测试性质的 system prompt；
-- **每一个样本都是一次全新的、独立的 `POST /chat/completions` 请求**；
+- **每一个样本都是一次全新的、独立的 HTTP POST**：OpenAI 使用 `/chat/completions`，Anthropic 使用 `/v1/messages`；
 - 不携带之前的 user/assistant 消息，不发送 conversation ID、previous response ID、固定 seed 或 cookie；
 - HTTP 客户端可能复用底层 TCP keep-alive 连接，但不会复用任何逻辑对话上下文；
 - 默认使用 `temperature: 1`；
 - 调用顺序会随机打乱，但同一批次的题面保持不变；
-- 输出预算为 256 tokens，以兼容先消耗 reasoning token 的模型；
+- 输出预算为 256 tokens；Anthropic 的 `max_tokens` 是必填字段，协议降级时也会保留；
 - 统计只读取最终可见回答，不使用模型的 reasoning 内容；
 - 指纹 Hash 编码各维度的完整概率分布；
 - 对比使用 Jensen–Shannon 距离，并结合共同维度、样本量和有效率显示采样置信度。
@@ -143,7 +159,6 @@ npm test
 public/          静态页面、样式、交互和指纹计算
 server.mjs      本地静态服务器与 API 转发层
 test/           Node.js 单元测试
-results/        不含凭据的真实采样示例
 ```
 
 ## 方法局限

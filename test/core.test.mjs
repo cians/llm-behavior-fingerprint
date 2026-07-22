@@ -12,7 +12,15 @@ import {
   jensenShannonDistance,
   parseProbeAnswer
 } from "../public/core.js";
-import { buildChatCompletionsUrl, buildModelsUrl, buildProbeRequestBody } from "../server.mjs";
+import {
+  buildAnthropicMessagesUrl,
+  buildChatCompletionsUrl,
+  buildModelsUrl,
+  buildProbeRequestBody,
+  extractAssistantText,
+  normalizeProtocol,
+  upstreamHeaders
+} from "../server.mjs";
 
 test("normalizes common OpenAI-compatible endpoint forms", () => {
   assert.equal(buildChatCompletionsUrl("https://api.example.com").href, "https://api.example.com/v1/chat/completions");
@@ -22,6 +30,49 @@ test("normalizes common OpenAI-compatible endpoint forms", () => {
     "https://openrouter.example/api/v1/chat/completions"
   );
   assert.equal(buildModelsUrl("https://api.example.com/v1").href, "https://api.example.com/v1/models");
+});
+
+test("normalizes common Anthropic Messages endpoint forms", () => {
+  assert.equal(buildAnthropicMessagesUrl("https://api.example.com").href, "https://api.example.com/v1/messages");
+  assert.equal(buildAnthropicMessagesUrl("https://api.example.com/v1/").href, "https://api.example.com/v1/messages");
+  assert.equal(
+    buildAnthropicMessagesUrl("https://gateway.example/anthropic/v1/messages").href,
+    "https://gateway.example/anthropic/v1/messages"
+  );
+  assert.equal(buildModelsUrl("https://api.example.com/v1/messages", "anthropic").href, "https://api.example.com/v1/models");
+});
+
+test("normalizes protocols and defaults old callers to OpenAI", () => {
+  assert.equal(normalizeProtocol(), "openai");
+  assert.equal(normalizeProtocol("ANTHROPIC"), "anthropic");
+  assert.throws(() => normalizeProtocol("responses"), /OpenAI 或 Anthropic/);
+});
+
+test("builds protocol-specific authentication headers", () => {
+  assert.deepEqual(upstreamHeaders("openai-key", "openai"), {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    Authorization: "Bearer openai-key"
+  });
+  assert.deepEqual(upstreamHeaders("anthropic-key", "anthropic"), {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "anthropic-version": "2023-06-01",
+    "x-api-key": "anthropic-key"
+  });
+});
+
+test("extracts only final Anthropic text blocks", () => {
+  const response = {
+    content: [
+      { type: "thinking", thinking: "hidden reasoning 47" },
+      { type: "redacted_thinking", data: "opaque" },
+      { type: "text", text: "73" },
+      { type: "tool_use", name: "irrelevant", input: {} }
+    ]
+  };
+  assert.equal(extractAssistantText(response, "anthropic"), "73");
+  assert.equal(extractAssistantText({ content: [{ type: "thinking", thinking: "47" }] }, "anthropic"), "");
 });
 
 test("parses constrained answers without accepting unrelated text", () => {
@@ -111,7 +162,7 @@ test("sampling presets produce real distributions and allow larger custom runs",
 });
 
 test("probe requests do not reveal that the prompt is part of a test", () => {
-  const body = buildProbeRequestBody({ model: "example-model" }, getProbe("number"));
+  const body = buildProbeRequestBody({ protocol: "openai", model: "example-model" }, getProbe("number"));
   assert.deepEqual(body.messages, [
     { role: "user", content: "Choose one random integer from 1 to 100. Return only the integer." }
   ]);
@@ -120,7 +171,7 @@ test("probe requests do not reveal that the prompt is part of a test", () => {
 });
 
 test("every sample builds a fresh stateless chat request", () => {
-  const endpoint = { model: "example-model" };
+  const endpoint = { protocol: "openai", model: "example-model" };
   const probe = getProbe("number");
   const first = buildProbeRequestBody(endpoint, probe);
   const second = buildProbeRequestBody(endpoint, probe);
@@ -134,5 +185,78 @@ test("every sample builds a fresh stateless chat request", () => {
     assert.equal("previous_response_id" in body, false);
     assert.equal("conversation" in body, false);
     assert.equal("seed" in body, false);
+  }
+});
+
+test("OpenAI and Anthropic requests are fresh, stateless, and protocol-correct", () => {
+  const probe = getProbe("number");
+  const endpoints = [
+    { protocol: "openai", model: "openai-model" },
+    { protocol: "anthropic", model: "claude-model" }
+  ];
+
+  for (const endpoint of endpoints) {
+    const first = buildProbeRequestBody(endpoint, probe);
+    const second = buildProbeRequestBody(endpoint, probe);
+    assert.notEqual(first, second);
+    assert.notEqual(first.messages, second.messages);
+    assert.deepEqual(first.messages, [{ role: "user", content: probe.prompt }]);
+    assert.equal(first.stream, false);
+    assert.equal(first.temperature, 1);
+    assert.equal(first.max_tokens, 256);
+    assert.equal(first.model, endpoint.model);
+    assert.equal("system" in first, false);
+    assert.equal("container" in first, false);
+    assert.equal("metadata" in first, false);
+    assert.equal("previous_response_id" in first, false);
+    assert.equal("conversation" in first, false);
+    assert.equal("seed" in first, false);
+  }
+});
+
+test("mock upstreams receive independent requests for both protocols", async (context) => {
+  const http = await import("node:http");
+  const seen = { openai: [], anthropic: [] };
+  const mock = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const protocol = request.url === "/v1/messages" ? "anthropic" : "openai";
+    seen[protocol].push(body);
+    response.setHeader("Content-Type", "application/json");
+    response.end(protocol === "anthropic"
+      ? JSON.stringify({ content: [{ type: "thinking", thinking: "99" }, { type: "text", text: "47" }] })
+      : JSON.stringify({ choices: [{ message: { content: "47" } }] }));
+  });
+  await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve));
+  context.after(() => mock.close());
+  const { port } = mock.address();
+  const probe = getProbe("number");
+
+  for (const protocol of ["openai", "anthropic"]) {
+    const path = protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
+    for (let sample = 0; sample < 10; sample += 1) {
+      const body = buildProbeRequestBody({ protocol, model: `${protocol}-model` }, probe);
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: upstreamHeaders(`${protocol}-key`, protocol),
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      assert.equal(extractAssistantText(data, protocol), "47");
+    }
+  }
+
+  for (const protocol of ["openai", "anthropic"]) {
+    assert.equal(seen[protocol].length, 10);
+    assert.equal(new Set(seen[protocol]).size, 10);
+    for (const body of seen[protocol]) {
+      assert.deepEqual(body.messages, [{ role: "user", content: probe.prompt }]);
+      assert.equal(body.messages.length, 1);
+      assert.equal("system" in body, false);
+      assert.equal("conversation" in body, false);
+      assert.equal("container" in body, false);
+      assert.equal("previous_response_id" in body, false);
+    }
   }
 });
