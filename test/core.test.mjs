@@ -13,12 +13,15 @@ import {
   parseProbeAnswer
 } from "../public/core.js";
 import {
+  CONCURRENCY_LIMITS,
   buildAnthropicMessagesUrl,
   buildChatCompletionsUrl,
   buildModelsUrl,
   buildProbeRequestBody,
   extractAssistantText,
+  normalizeConcurrency,
   normalizeProtocol,
+  runWithConcurrency,
   upstreamHeaders
 } from "../server.mjs";
 
@@ -46,6 +49,48 @@ test("normalizes protocols and defaults old callers to OpenAI", () => {
   assert.equal(normalizeProtocol(), "openai");
   assert.equal(normalizeProtocol("ANTHROPIC"), "anthropic");
   assert.throws(() => normalizeProtocol("responses"), /OpenAI 或 Anthropic/);
+});
+
+test("normalizes bounded request concurrency", () => {
+  assert.equal(normalizeConcurrency(), CONCURRENCY_LIMITS.default);
+  assert.equal(normalizeConcurrency(1), 1);
+  assert.equal(normalizeConcurrency("10"), 10);
+  assert.throws(() => normalizeConcurrency(0), /并发请求数/);
+  assert.throws(() => normalizeConcurrency(11), /并发请求数/);
+  assert.throws(() => normalizeConcurrency(2.5), /并发请求数/);
+});
+
+test("bounded concurrency runs tasks in parallel without reusing items", async () => {
+  const items = Array.from({ length: 10 }, (_, index) => ({ index }));
+  const seen = [];
+  let active = 0;
+  let peak = 0;
+
+  await runWithConcurrency(items, 4, async (item) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    seen.push(item);
+    active -= 1;
+  });
+
+  assert.equal(peak, 4);
+  assert.equal(seen.length, items.length);
+  assert.equal(new Set(seen).size, items.length);
+  assert.deepEqual(seen.map((item) => item.index).sort((a, b) => a - b), items.map((item) => item.index));
+});
+
+test("bounded concurrency stops assigning new work after a worker fails", async () => {
+  const started = [];
+  await assert.rejects(
+    runWithConcurrency(Array.from({ length: 12 }, (_, index) => index), 4, async (item) => {
+      started.push(item);
+      if (item === 1) throw new Error("stop");
+      await new Promise((resolve) => setTimeout(resolve, 12));
+    }),
+    /stop/
+  );
+  assert.ok(started.length <= 4);
 });
 
 test("builds protocol-specific authentication headers", () => {
@@ -217,12 +262,18 @@ test("OpenAI and Anthropic requests are fresh, stateless, and protocol-correct",
 test("mock upstreams receive independent requests for both protocols", async (context) => {
   const http = await import("node:http");
   const seen = { openai: [], anthropic: [] };
+  const active = { openai: 0, anthropic: 0 };
+  const peak = { openai: 0, anthropic: 0 };
   const mock = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const protocol = request.url === "/v1/messages" ? "anthropic" : "openai";
+    active[protocol] += 1;
+    peak[protocol] = Math.max(peak[protocol], active[protocol]);
     seen[protocol].push(body);
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    active[protocol] -= 1;
     response.setHeader("Content-Type", "application/json");
     response.end(protocol === "anthropic"
       ? JSON.stringify({ content: [{ type: "thinking", thinking: "99" }, { type: "text", text: "47" }] })
@@ -235,7 +286,7 @@ test("mock upstreams receive independent requests for both protocols", async (co
 
   for (const protocol of ["openai", "anthropic"]) {
     const path = protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
-    for (let sample = 0; sample < 10; sample += 1) {
+    await runWithConcurrency(Array.from({ length: 10 }), 4, async () => {
       const body = buildProbeRequestBody({ protocol, model: `${protocol}-model` }, probe);
       const response = await fetch(`http://127.0.0.1:${port}${path}`, {
         method: "POST",
@@ -244,10 +295,11 @@ test("mock upstreams receive independent requests for both protocols", async (co
       });
       const data = await response.json();
       assert.equal(extractAssistantText(data, protocol), "47");
-    }
+    });
   }
 
   for (const protocol of ["openai", "anthropic"]) {
+    assert.equal(peak[protocol], 4);
     assert.equal(seen[protocol].length, 10);
     assert.equal(new Set(seen[protocol]).size, 10);
     for (const body of seen[protocol]) {

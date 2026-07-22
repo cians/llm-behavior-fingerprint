@@ -79,6 +79,8 @@ Anthropic Messages 协议要求填写模型 ID。两种协议都尝试通过 `GE
 
 样本越多，分布越稳定，但 API 调用费用也越高。
 
+默认每个端点同时执行 4 个独立请求，可以在页面中设为 1–10。并发只改变请求的在途数量，不会合并样本或共享上下文；高并发速度更快，但更容易触发供应商的速率限制。如果实验要求最严格的时间隔离，请把并发设为 1。
+
 ### 4. 创建自定义随机 Prompt
 
 打开“自定义随机 Prompt”，填写：
@@ -127,6 +129,7 @@ water
 
 - 请求只包含一条普通 `user` 消息，不附加会透露测试性质的 system prompt；
 - **每一个样本都是一次全新的、独立的 HTTP POST**：OpenAI 使用 `/chat/completions`，Anthropic 使用 `/v1/messages`；
+- 同一端点内部使用有上限的异步并发池，默认 4 路、可调 1–10；每一路仍独立创建请求体；
 - 不携带之前的 user/assistant 消息，不发送 conversation ID、previous response ID、固定 seed 或 cookie；
 - HTTP 客户端可能复用底层 TCP keep-alive 连接，但不会复用任何逻辑对话上下文；
 - 默认使用 `temperature: 1`；

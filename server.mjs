@@ -11,6 +11,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY_BYTES = 80 * 1024;
 const MAX_REQUESTS = 1_000;
 const PROTOCOLS = new Set(["openai", "anthropic"]);
+export const CONCURRENCY_LIMITS = Object.freeze({ min: 1, max: 10, default: 4 });
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -90,6 +91,35 @@ export function normalizeProtocol(value) {
   return protocol;
 }
 
+export function normalizeConcurrency(value) {
+  const concurrency = value == null ? CONCURRENCY_LIMITS.default : Number(value);
+  if (!Number.isInteger(concurrency) || concurrency < CONCURRENCY_LIMITS.min || concurrency > CONCURRENCY_LIMITS.max) {
+    throw new HttpError(400, `并发请求数需在 ${CONCURRENCY_LIMITS.min} 到 ${CONCURRENCY_LIMITS.max} 之间`);
+  }
+  return concurrency;
+}
+
+export async function runWithConcurrency(items, concurrency, task) {
+  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
+  let nextIndex = 0;
+  let firstError = null;
+
+  const worker = async () => {
+    while (!firstError && nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        await task(items[index], index);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError) throw firstError;
+}
+
 export function buildChatCompletionsUrl(rawUrl) {
   const parsed = parseEndpoint(rawUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
@@ -141,6 +171,10 @@ export function upstreamHeaders(key, protocol = "openai") {
 
 async function fetchUpstream(url, options, timeoutMs = 45_000) {
   const controller = new AbortController();
+  const externalSignal = options.signal;
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
@@ -157,11 +191,15 @@ async function fetchUpstream(url, options, timeoutMs = 45_000) {
     }
     return data;
   } catch (error) {
-    if (error.name === "AbortError") throw new HttpError(504, "模型请求超时");
+    if (error.name === "AbortError") {
+      if (externalSignal?.aborted) throw new HttpError(499, "模型请求已取消");
+      throw new HttpError(504, "模型请求超时");
+    }
     if (error instanceof HttpError) throw error;
     throw new HttpError(502, `无法连接模型端点：${error.message}`);
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 }
 
@@ -203,7 +241,7 @@ export function buildProbeRequestBody(endpoint, probe) {
   return body;
 }
 
-async function requestProbe({ endpoint, probe }) {
+async function requestProbe({ endpoint, probe, signal }) {
   const protocol = normalizeProtocol(endpoint.protocol);
   const url = protocol === "anthropic" ? buildAnthropicMessagesUrl(endpoint.url) : buildChatCompletionsUrl(endpoint.url);
   const baseBody = buildProbeRequestBody(endpoint, probe);
@@ -213,6 +251,7 @@ async function requestProbe({ endpoint, probe }) {
     data = await fetchUpstream(url, {
       method: "POST",
       headers: upstreamHeaders(endpoint.key, protocol),
+      signal,
       body: JSON.stringify(baseBody)
     });
   } catch (error) {
@@ -223,6 +262,7 @@ async function requestProbe({ endpoint, probe }) {
     data = await fetchUpstream(url, {
       method: "POST",
       headers: upstreamHeaders(endpoint.key, protocol),
+      signal,
       body: JSON.stringify(fallbackBody)
     });
   }
@@ -268,6 +308,7 @@ async function handleRun(request, response) {
   if (!Number.isInteger(samplesPerProbe) || samplesPerProbe < SAMPLE_LIMITS.min || samplesPerProbe > SAMPLE_LIMITS.max) {
     throw new HttpError(400, `每个问题的采样次数需在 ${SAMPLE_LIMITS.min} 到 ${SAMPLE_LIMITS.max} 之间`);
   }
+  const concurrency = normalizeConcurrency(body.concurrency);
 
   const uniqueIds = [...new Set(Array.isArray(body.probeIds) ? body.probeIds : [])];
   let customProbe = null;
@@ -300,14 +341,20 @@ async function handleRun(request, response) {
   );
   let completed = 0;
   let consecutiveErrors = 0;
+  let fatalError = null;
+  const batchController = new AbortController();
+  request.once("aborted", () => batchController.abort());
+  response.once("close", () => {
+    if (!response.writableEnded) batchController.abort();
+  });
 
-  write({ type: "start", total, probeIds: probes.map((probe) => probe.id) });
+  write({ type: "start", total, concurrency, probeIds: probes.map((probe) => probe.id) });
 
-  for (const item of schedule) {
-    if (response.destroyed) return;
+  await runWithConcurrency(schedule, concurrency, async (item) => {
+    if (response.destroyed || fatalError) return;
     const startedAt = Date.now();
     try {
-      const result = await requestProbe({ endpoint, probe: item.probe });
+      const result = await requestProbe({ endpoint, probe: item.probe, signal: batchController.signal });
       completed += 1;
       consecutiveErrors = 0;
       write({
@@ -322,6 +369,7 @@ async function handleRun(request, response) {
         latencyMs: Date.now() - startedAt
       });
     } catch (error) {
+      if (response.destroyed || (fatalError && error.status === 499)) return;
       completed += 1;
       consecutiveErrors += 1;
       write({
@@ -336,12 +384,18 @@ async function handleRun(request, response) {
       });
 
       const fatalStatus = [400, 401, 403, 404, 429].includes(error.status);
-      if (fatalStatus || consecutiveErrors >= 3) {
-        write({ type: "fatal", status: error.status || 500, message: error.message });
-        response.end();
-        return;
+      if ((fatalStatus || consecutiveErrors >= 3) && !fatalError) {
+        fatalError = { status: error.status || 500, message: error.message };
+        batchController.abort();
       }
     }
+  });
+
+  if (response.destroyed) return;
+  if (fatalError) {
+    write({ type: "fatal", ...fatalError });
+    response.end();
+    return;
   }
 
   write({ type: "done", completed, total });

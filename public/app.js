@@ -12,6 +12,10 @@ import {
 
 const STORAGE_KEY = "model-trace-history-v1";
 const MAX_HISTORY = 30;
+const CONCURRENCY_LIMITS = { min: 1, max: 10, default: 4 };
+const BASE_TITLE = document.title;
+const TAB_FRAMES = ["◐", "◓", "◑", "◒"];
+const REDUCED_MOTION = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
 const PROTOCOL_LABELS = { openai: "OpenAI", anthropic: "Anthropic" };
 const PROTOCOL_UI = {
   openai: {
@@ -35,11 +39,15 @@ const state = {
   preset: "standard",
   probeIds: new Set(PRESETS.standard.probeIds),
   samplesPerProbe: PRESETS.standard.samplesPerProbe,
+  concurrency: CONCURRENCY_LIMITS.default,
   histories: loadHistories(),
   abortController: null,
   latestResult: null,
   running: false,
-  customProbe: null
+  customProbe: null,
+  tabAnimationTimer: null,
+  tabAnimationFrame: 0,
+  runProgress: { completed: 0, total: 0, tag: "A" }
 };
 
 const elements = {
@@ -56,6 +64,7 @@ const elements = {
   runSubLabel: document.querySelector("#runSubLabel"),
   formError: document.querySelector("#formError"),
   runButton: document.querySelector("#runExperiment"),
+  tabRunProgress: document.querySelector("#tabRunProgress"),
   runConsole: document.querySelector("#runConsole"),
   consoleTitle: document.querySelector("#consoleTitle"),
   progressBar: document.querySelector("#progressBar"),
@@ -80,6 +89,60 @@ const elements = {
   customProbeError: document.querySelector("#customProbeError")
 };
 elements.samplesPerProbe = document.querySelector("#samplesPerProbe");
+elements.requestConcurrency = document.querySelector("#requestConcurrency");
+
+const favicon = document.querySelector('link[rel~="icon"]') ?? document.createElement("link");
+favicon.rel = "icon";
+if (!favicon.parentNode) document.head.append(favicon);
+
+function renderFavicon({ running = false, progress = 0, frame = 0 } = {}) {
+  const heights = running
+    ? [10, 17, 25, 32, 25, 17, 10].map((height, index) => height + ((index + frame) % 3 === 0 ? 5 : 0))
+    : [10, 17, 25, 32, 25, 17, 10];
+  const bars = heights.map((height, index) => `<rect x="${17 + index * 4.5}" y="${48 - height}" width="2.6" height="${height}" rx="1.3"/>`).join("");
+  const ringProgress = running ? Math.max(1, Math.min(100, progress)) : 100;
+  const accent = running ? "#65f7d4" : "#d8ff4f";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#07100d"/><circle cx="32" cy="32" r="27" fill="none" stroke="#244037" stroke-width="3"/><circle cx="32" cy="32" r="27" fill="none" stroke="${accent}" stroke-width="3" stroke-linecap="round" pathLength="100" stroke-dasharray="${ringProgress} 100" transform="rotate(-90 32 32)"/><g fill="#d8ff4f">${bars}</g></svg>`;
+  favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function renderTabProgress() {
+  const { completed, total, tag } = state.runProgress;
+  const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const frame = state.tabAnimationFrame % TAB_FRAMES.length;
+  const glyph = REDUCED_MOTION?.matches ? "●" : TAB_FRAMES[frame];
+  document.title = `${glyph} ${percent}% · 端点 ${tag} · ${BASE_TITLE}`;
+  elements.tabRunProgress.textContent = `${percent}%`;
+  renderFavicon({ running: true, progress: percent, frame });
+}
+
+function startExperimentVisuals(total) {
+  state.runProgress = { completed: 0, total, tag: "A" };
+  state.tabAnimationFrame = 0;
+  document.body.classList.add("experiment-running");
+  renderTabProgress();
+  clearInterval(state.tabAnimationTimer);
+  if (!REDUCED_MOTION?.matches) {
+    state.tabAnimationTimer = setInterval(() => {
+      state.tabAnimationFrame += 1;
+      renderTabProgress();
+    }, 520);
+  }
+}
+
+function updateExperimentVisuals(completed, total, tag) {
+  state.runProgress = { completed, total, tag };
+  renderTabProgress();
+}
+
+function stopExperimentVisuals() {
+  clearInterval(state.tabAnimationTimer);
+  state.tabAnimationTimer = null;
+  document.body.classList.remove("experiment-running");
+  elements.tabRunProgress.textContent = "0%";
+  document.title = BASE_TITLE;
+  renderFavicon();
+}
 
 function loadHistories() {
   try {
@@ -167,9 +230,9 @@ function updateEstimate() {
   elements.requestCount.textContent = String(perEndpoint);
   elements.probeCount.textContent = `${state.probeIds.size} / ${TOTAL_PROBE_SLOTS}`;
   const labels = {
-    single: ["生成行为指纹", `预计 ${total} 次模型请求`],
-    dual: ["扫描并对比", `预计共 ${total} 次模型请求`],
-    history: ["与历史指纹对比", `预计 ${total} 次模型请求`]
+    single: ["生成行为指纹", `预计 ${total} 次请求 · ${state.concurrency} 路并发`],
+    dual: ["扫描并对比", `预计共 ${total} 次请求 · ${state.concurrency} 路并发`],
+    history: ["与历史指纹对比", `预计 ${total} 次请求 · ${state.concurrency} 路并发`]
   };
   [elements.runLabel.textContent, elements.runSubLabel.textContent] = labels[state.mode];
 }
@@ -228,7 +291,7 @@ function renderHistoryPreview() {
   elements.historyPreview.innerHTML = `
     <span class="identity-label">REFERENCE SIGNATURE</span>
     <strong>${escapeHtml(history.fingerprint.signature)}</strong>
-    <div class="preview-meta"><span class="protocol-badge ${history.protocol}">${PROTOCOL_LABELS[history.protocol]}</span>${escapeHtml(history.label)} · ${history.fingerprint.dimensions.length} 维 · ${history.fingerprint.valid} 个有效样本</div>
+    <div class="preview-meta"><span class="protocol-badge ${history.protocol}">${PROTOCOL_LABELS[history.protocol]}</span>${escapeHtml(history.label)} · ${history.fingerprint.dimensions.length} 维 · ${history.fingerprint.valid} 个有效样本 · ${history.concurrency || CONCURRENCY_LIMITS.default} 路</div>
     <p>${escapeHtml(history.model || "未指定模型 ID")}<br>${escapeHtml(history.url || "未记录端点")}${history.customProbe ? `<br>自定义探针：${escapeHtml(history.customProbe.label)}` : ""}</p>
   `;
 }
@@ -242,6 +305,9 @@ function syncExperimentToHistory(history) {
     state.samplesPerProbe = Math.max(SAMPLE_LIMITS.min, Math.min(SAMPLE_LIMITS.max, history.samplesPerProbe));
     elements.samplesPerProbe.value = String(state.samplesPerProbe);
   }
+  const historyConcurrency = Number.isInteger(history.concurrency) ? history.concurrency : CONCURRENCY_LIMITS.default;
+  state.concurrency = Math.max(CONCURRENCY_LIMITS.min, Math.min(CONCURRENCY_LIMITS.max, historyConcurrency));
+  elements.requestConcurrency.value = String(state.concurrency);
   renderProbes();
 
   if (!history.customProbe) {
@@ -278,7 +344,7 @@ function renderHistory() {
     <article class="history-card" data-id="${escapeHtml(history.id)}">
       <header><span class="history-type">BEHAVIOR PRINT · ${PROTOCOL_LABELS[history.protocol]}</span><time>${formatDate(history.createdAt)}</time></header>
       <h3>${escapeHtml(history.label)}</h3>
-      <div class="history-endpoint">${escapeHtml(history.model || "未指定模型 ID")}<br>${escapeHtml(history.url || "未记录端点")}</div>
+      <div class="history-endpoint">${escapeHtml(history.model || "未指定模型 ID")} · ${history.concurrency || CONCURRENCY_LIMITS.default} 路并发<br>${escapeHtml(history.url || "未记录端点")}</div>
       <div class="history-hash">${escapeHtml(history.fingerprint.signature)}</div>
       <div class="history-meta">
         <div><span>维度</span><b>${history.fingerprint.dimensions.length}</b></div>
@@ -331,6 +397,9 @@ function validateExperiment() {
   if (!Number.isInteger(state.samplesPerProbe) || state.samplesPerProbe < SAMPLE_LIMITS.min || state.samplesPerProbe > SAMPLE_LIMITS.max) {
     return `每个探针的采样次数需在 ${SAMPLE_LIMITS.min} 到 ${SAMPLE_LIMITS.max} 之间。`;
   }
+  if (!Number.isInteger(state.concurrency) || state.concurrency < CONCURRENCY_LIMITS.min || state.concurrency > CONCURRENCY_LIMITS.max) {
+    return `异步并发请求数需在 ${CONCURRENCY_LIMITS.min} 到 ${CONCURRENCY_LIMITS.max} 之间。`;
+  }
   const endpointA = getEndpoint("A");
   try { new URL(endpointA.url); } catch { return "请输入有效的端点 A 模型 URL。"; }
   if (endpointA.protocol === "anthropic" && !endpointA.model) return "Anthropic 端点 A 必须填写模型 ID。";
@@ -372,6 +441,7 @@ function liveDimension(samples, probeId) {
 
 function updateLiveConsole(event, samples, totalOffset, grandTotal) {
   const completed = totalOffset + event.completed;
+  updateExperimentVisuals(completed, grandTotal, elements.activeEndpoint.textContent);
   elements.progressText.textContent = `${completed} / ${grandTotal}`;
   elements.progressBar.style.width = `${(completed / grandTotal) * 100}%`;
   const valid = Object.values(samples).flat().filter((sample) => sample.value).length;
@@ -410,12 +480,13 @@ async function readNdjson(response, onEvent) {
   if (buffer.trim()) onEvent(JSON.parse(buffer));
 }
 
-async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal) {
+async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal, concurrency) {
   const probeIds = [...state.probeIds];
   const samples = Object.fromEntries(probeIds.map((probeId) => [probeId, []]));
   const errors = [];
-  elements.activeEndpoint.textContent = tag;
+  elements.activeEndpoint.textContent = `${tag} · ${concurrency} 路`;
   elements.consoleTitle.textContent = `正在采集端点 ${tag} 的行为信号`;
+  updateExperimentVisuals(totalOffset, grandTotal, tag);
   logEvent(`端点 ${tag} 开始采样：${endpoint.label}`);
 
   const response = await fetch("/api/run", {
@@ -425,6 +496,7 @@ async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal) {
       endpoint,
       probeIds,
       samplesPerProbe: state.samplesPerProbe,
+      concurrency,
       customProbe: state.customProbe
     }),
     signal: state.abortController.signal
@@ -449,7 +521,7 @@ async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal) {
   const fingerprint = buildFingerprint({ probeIds, samples, probes: state.customProbe ? [state.customProbe] : [] });
   if (!fingerprint.valid) throw new Error(errors[0] || "没有得到可解析的模型回答");
   logEvent(`端点 ${tag} 完成，指纹 ${fingerprint.signature}`);
-  return { endpoint, samples, fingerprint, errors };
+  return { endpoint, samples, fingerprint, errors, concurrency };
 }
 
 function makeHistoryRecord(run) {
@@ -462,6 +534,7 @@ function makeHistoryRecord(run) {
     model: run.endpoint.model,
     preset: state.preset,
     samplesPerProbe: state.samplesPerProbe,
+    concurrency: run.concurrency,
     probeIds: [...state.probeIds],
     customProbe: state.customProbe,
     fingerprint: run.fingerprint
@@ -520,7 +593,7 @@ function renderSingleResult(run, record = null) {
         <p><span class="protocol-badge ${run.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[run.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(run.endpoint.model || "未指定模型 ID")}<br>${escapeHtml(sanitizeUrl(run.endpoint.url))}</p>
         <div class="hash-plate"><small>SIGNATURE HASH</small><strong>${escapeHtml(fingerprint.signature)}</strong></div>
         <div class="identity-meta">
-          <div><span>采样规格</span><b>${state.samplesPerProbe} × ${fingerprint.dimensions.length}</b></div>
+          <div><span>采样规格</span><b>${state.samplesPerProbe} × ${fingerprint.dimensions.length} · ${run.concurrency || CONCURRENCY_LIMITS.default} 路</b></div>
           <div><span>生成时间</span><b>${formatDate(Date.now())}</b></div>
           <div><span>历史留存</span><b>${record ? "已保存" : "未保存"}</b></div>
         </div>
@@ -531,6 +604,10 @@ function renderSingleResult(run, record = null) {
   `;
 }
 
+function runConcurrency(run) {
+  return run.concurrency || CONCURRENCY_LIMITS.default;
+}
+
 function renderComparisonResult(left, right, comparison, sourceLabel = "实时端点") {
   elements.resultTitle.textContent = "行为指纹对比完成";
   elements.resultContent.innerHTML = `
@@ -538,7 +615,7 @@ function renderComparisonResult(left, right, comparison, sourceLabel = "实时�
       <article class="compare-model">
         <div class="model-letter">A</div>
         <h3>${escapeHtml(left.endpoint.label)}</h3>
-        <p><span class="protocol-badge ${left.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[left.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(left.endpoint.model || "未指定模型 ID")}<br>${escapeHtml(sanitizeUrl(left.endpoint.url))}</p>
+        <p><span class="protocol-badge ${left.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[left.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(left.endpoint.model || "未指定模型 ID")} · ${runConcurrency(left)} 路并发<br>${escapeHtml(sanitizeUrl(left.endpoint.url))}</p>
         <div class="compare-hash">${escapeHtml(left.fingerprint.signature)}</div>
       </article>
       <div class="comparison-score ${comparison.tone}">
@@ -549,7 +626,7 @@ function renderComparisonResult(left, right, comparison, sourceLabel = "实时�
       <article class="compare-model right">
         <div class="model-letter">${sourceLabel === "历史基线" ? "H" : "B"}</div>
         <h3>${escapeHtml(right.endpoint.label)}</h3>
-        <p><span class="protocol-badge ${right.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[right.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(right.endpoint.model || "未指定模型 ID")}<br>${escapeHtml(sanitizeUrl(right.endpoint.url))}</p>
+        <p><span class="protocol-badge ${right.endpoint.protocol || "openai"}">${PROTOCOL_LABELS[right.endpoint.protocol] || "OpenAI"}</span>${escapeHtml(right.endpoint.model || "未指定模型 ID")} · ${runConcurrency(right)} 路并发<br>${escapeHtml(sanitizeUrl(right.endpoint.url))}</p>
         <div class="compare-hash">${escapeHtml(right.fingerprint.signature)}</div>
       </article>
     </div>
@@ -568,6 +645,7 @@ function renderComparisonResult(left, right, comparison, sourceLabel = "实时�
 function historyAsRun(history) {
   return {
     endpoint: { label: history.label, protocol: history.protocol || "openai", url: history.url, model: history.model },
+    concurrency: history.concurrency || CONCURRENCY_LIMITS.default,
     fingerprint: history.fingerprint,
     samples: {}
   };
@@ -588,12 +666,14 @@ async function runExperiment(event) {
   elements.results.classList.add("hidden");
   elements.runConsole.classList.remove("hidden");
   resetConsole();
-  elements.runConsole.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const perEndpoint = state.probeIds.size * state.samplesPerProbe;
   const grandTotal = perEndpoint * (state.mode === "dual" ? 2 : 1);
+  const experimentConcurrency = state.concurrency;
+  startExperimentVisuals(grandTotal);
+  elements.runConsole.scrollIntoView({ behavior: "smooth", block: "start" });
   try {
-    const runA = await sampleEndpoint(getEndpoint("A"), "A", 0, grandTotal);
+    const runA = await sampleEndpoint(getEndpoint("A"), "A", 0, grandTotal, experimentConcurrency);
     let savedA = null;
     if (document.querySelector("#saveHistory").checked) savedA = saveRunHistory(runA);
 
@@ -601,7 +681,7 @@ async function runExperiment(event) {
       state.latestResult = { type: "single", run: runA, historyId: savedA?.id };
       renderSingleResult(runA, savedA);
     } else if (state.mode === "dual") {
-      const runB = await sampleEndpoint(getEndpoint("B"), "B", perEndpoint, grandTotal);
+      const runB = await sampleEndpoint(getEndpoint("B"), "B", perEndpoint, grandTotal, experimentConcurrency);
       let savedB = null;
       if (document.querySelector("#saveHistory").checked) savedB = saveRunHistory(runB);
       const comparison = compareFingerprints(runA.fingerprint, runB.fingerprint);
@@ -616,6 +696,7 @@ async function runExperiment(event) {
     }
 
     elements.progressBar.style.width = "100%";
+    updateExperimentVisuals(grandTotal, grandTotal, elements.activeEndpoint.textContent);
     elements.consoleTitle.textContent = "采样完成，统计证据已生成";
     setTimeout(() => {
       elements.runConsole.classList.add("hidden");
@@ -632,6 +713,7 @@ async function runExperiment(event) {
     }
   } finally {
     state.running = false;
+    stopExperimentVisuals();
     elements.runButton.disabled = false;
     state.abortController = null;
   }
@@ -711,6 +793,22 @@ elements.samplesPerProbe.addEventListener("change", () => {
   elements.samplesPerProbe.value = String(normalized);
   state.preset = "custom";
   document.querySelectorAll(".preset-card").forEach((label) => label.classList.remove("selected"));
+  updateEstimate();
+});
+elements.requestConcurrency.addEventListener("input", () => {
+  const requested = Number(elements.requestConcurrency.value);
+  if (Number.isInteger(requested) && requested >= CONCURRENCY_LIMITS.min && requested <= CONCURRENCY_LIMITS.max) {
+    state.concurrency = requested;
+    updateEstimate();
+  }
+});
+elements.requestConcurrency.addEventListener("change", () => {
+  const requested = Number(elements.requestConcurrency.value);
+  const normalized = Number.isFinite(requested)
+    ? Math.max(CONCURRENCY_LIMITS.min, Math.min(CONCURRENCY_LIMITS.max, Math.round(requested)))
+    : CONCURRENCY_LIMITS.default;
+  state.concurrency = normalized;
+  elements.requestConcurrency.value = String(normalized);
   updateEstimate();
 });
 elements.enableCustomProbe.addEventListener("change", () => {
@@ -793,4 +891,5 @@ renderProbes();
 renderHistory();
 updateProtocolUi("A");
 updateProtocolUi("B");
+renderFavicon();
 updateEstimate();
