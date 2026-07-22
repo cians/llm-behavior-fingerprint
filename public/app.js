@@ -509,10 +509,11 @@ async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal, concurrenc
       updateLiveConsole(event, samples, totalOffset, grandTotal);
       logEvent(`${activeProbe(event.probeId).shortLabel} → ${event.value || `未解析：${event.raw}`}`);
     } else if (event.type === "sample_error") {
-      samples[event.probeId].push({ value: null, error: event.message, latencyMs: event.latencyMs });
+      samples[event.probeId].push({ value: null, error: event.message, status: event.status, latencyMs: event.latencyMs });
       errors.push(event.message);
       updateLiveConsole(event, samples, totalOffset, grandTotal);
-      logEvent(`${activeProbe(event.probeId).shortLabel} 请求失败：${event.message}`, true);
+      const continuation = event.continuing ? "（已跳过本样本并继续）" : "";
+      logEvent(`${activeProbe(event.probeId).shortLabel} 请求失败：${event.message}${continuation}`, true);
     } else if (event.type === "fatal") {
       fatalMessage = event.message;
     }

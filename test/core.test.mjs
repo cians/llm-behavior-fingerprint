@@ -19,9 +19,12 @@ import {
   buildModelsUrl,
   buildProbeRequestBody,
   extractAssistantText,
+  formatUpstreamError,
   normalizeConcurrency,
   normalizeProtocol,
   runWithConcurrency,
+  server,
+  shouldAbortSampling,
   upstreamHeaders
 } from "../server.mjs";
 
@@ -105,6 +108,31 @@ test("builds protocol-specific authentication headers", () => {
     "anthropic-version": "2023-06-01",
     "x-api-key": "anthropic-key"
   });
+});
+
+test("surfaces nested provider details from OpenRouter-style errors", () => {
+  const message = formatUpstreamError({
+    error: {
+      message: "Provider returned error",
+      code: 429,
+      metadata: {
+        provider_name: "Moonshot AI",
+        raw: JSON.stringify({ error: { message: "Rate limit exceeded for this model" } })
+      }
+    }
+  }, 429);
+
+  assert.equal(message, "HTTP 429 · Provider returned error · Moonshot AI · Rate limit exceeded for this model");
+});
+
+test("isolated rate limits continue while repeated rate limits and auth errors stop", () => {
+  assert.equal(shouldAbortSampling({ status: 429, consecutiveErrors: 0, consecutiveRateLimits: 1, concurrency: 4 }), false);
+  assert.equal(shouldAbortSampling({ status: 429, consecutiveErrors: 0, consecutiveRateLimits: 3, concurrency: 4 }), false);
+  assert.equal(shouldAbortSampling({ status: 429, consecutiveErrors: 0, consecutiveRateLimits: 4, concurrency: 4 }), true);
+  assert.equal(shouldAbortSampling({ status: 429, consecutiveErrors: 0, consecutiveRateLimits: 3, concurrency: 1 }), true);
+  for (const status of [400, 401, 403, 404]) {
+    assert.equal(shouldAbortSampling({ status, consecutiveErrors: 1, consecutiveRateLimits: 0, concurrency: 4 }), true);
+  }
 });
 
 test("extracts only final Anthropic text blocks", () => {
@@ -311,4 +339,66 @@ test("mock upstreams receive independent requests for both protocols", async (co
       assert.equal("previous_response_id" in body, false);
     }
   }
+});
+
+test("a single upstream 429 is recorded and the sampling run still completes", async (context) => {
+  const http = await import("node:http");
+  let requestCount = 0;
+  const mock = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume request body */ }
+    requestCount += 1;
+    response.setHeader("Content-Type", "application/json");
+    if (requestCount === 1) {
+      response.writeHead(429);
+      response.end(JSON.stringify({
+        error: {
+          message: "Provider returned error",
+          metadata: {
+            provider_name: "Mock Provider",
+            raw: JSON.stringify({ error: { message: "Temporary rate limit" } })
+          }
+        }
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ choices: [{ message: { content: "Q" } }] }));
+  });
+  await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve));
+  context.after(() => mock.close());
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => server.close());
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      endpoint: {
+        label: "Mock",
+        protocol: "openai",
+        url: `http://127.0.0.1:${mock.address().port}`,
+        model: "mock-model"
+      },
+      probeIds: ["letter"],
+      samplesPerProbe: 10,
+      concurrency: 4
+    })
+  });
+  const events = (await response.text())
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
+  const failures = events.filter((event) => event.type === "sample_error");
+  assert.equal(response.status, 200);
+  assert.equal(requestCount, 10);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].status, 429);
+  assert.equal(failures[0].continuing, true);
+  assert.match(failures[0].message, /HTTP 429 .* Mock Provider .* Temporary rate limit/);
+  assert.equal(events.filter((event) => event.type === "sample").length, 9);
+  assert.equal(events.some((event) => event.type === "fatal"), false);
+  assert.equal(events.at(-1).type, "done");
+  assert.equal(events.at(-1).completed, 10);
 });

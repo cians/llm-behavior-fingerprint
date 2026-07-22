@@ -72,6 +72,47 @@ class HttpError extends Error {
   }
 }
 
+function cleanErrorText(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function errorMessageFromPayload(payload) {
+  if (typeof payload === "string") return cleanErrorText(payload);
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.error === "string") return cleanErrorText(payload.error);
+  return cleanErrorText(payload.error?.message)
+    || cleanErrorText(payload.message)
+    || cleanErrorText(payload.detail);
+}
+
+function parseNestedError(raw) {
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function formatUpstreamError(data, httpStatus) {
+  const error = data?.error && typeof data.error === "object" ? data.error : null;
+  const metadata = error?.metadata && typeof error.metadata === "object" ? error.metadata : null;
+  const raw = metadata?.raw;
+  const nested = parseNestedError(raw);
+  const parts = [
+    `HTTP ${httpStatus}`,
+    errorMessageFromPayload(data),
+    cleanErrorText(metadata?.provider_name || metadata?.provider),
+    errorMessageFromPayload(nested) || (!nested ? cleanErrorText(raw) : ""),
+    cleanErrorText(data?.raw)
+  ].filter(Boolean);
+  const unique = parts.filter((part, index) => parts.findIndex((candidate) => candidate.toLowerCase() === part.toLowerCase()) === index);
+  return unique.join(" · ").slice(0, 500) || `HTTP ${httpStatus} · 上游请求失败`;
+}
+
 function parseEndpoint(rawUrl) {
   let parsed;
   try {
@@ -186,8 +227,7 @@ async function fetchUpstream(url, options, timeoutMs = 45_000) {
       data = { raw: text.slice(0, 500) };
     }
     if (!response.ok) {
-      const message = data?.error?.message || data?.message || data?.raw || `上游返回 HTTP ${response.status}`;
-      throw new HttpError(response.status, String(message).slice(0, 500));
+      throw new HttpError(response.status, formatUpstreamError(data, response.status));
     }
     return data;
   } catch (error) {
@@ -281,6 +321,12 @@ function shuffle(items) {
   return output;
 }
 
+export function shouldAbortSampling({ status, consecutiveErrors, consecutiveRateLimits, concurrency }) {
+  if ([400, 401, 403, 404].includes(status)) return true;
+  if (status === 429) return consecutiveRateLimits >= Math.max(3, normalizeConcurrency(concurrency));
+  return consecutiveErrors >= 3;
+}
+
 async function handleModels(request, response) {
   const body = await readJsonBody(request);
   const protocol = normalizeProtocol(body.protocol);
@@ -341,6 +387,7 @@ async function handleRun(request, response) {
   );
   let completed = 0;
   let consecutiveErrors = 0;
+  let consecutiveRateLimits = 0;
   let fatalError = null;
   const batchController = new AbortController();
   request.once("aborted", () => batchController.abort());
@@ -357,6 +404,7 @@ async function handleRun(request, response) {
       const result = await requestProbe({ endpoint, probe: item.probe, signal: batchController.signal });
       completed += 1;
       consecutiveErrors = 0;
+      consecutiveRateLimits = 0;
       write({
         type: "sample",
         completed,
@@ -371,7 +419,19 @@ async function handleRun(request, response) {
     } catch (error) {
       if (response.destroyed || (fatalError && error.status === 499)) return;
       completed += 1;
-      consecutiveErrors += 1;
+      if (error.status === 429) {
+        consecutiveRateLimits += 1;
+        consecutiveErrors = 0;
+      } else {
+        consecutiveErrors += 1;
+        consecutiveRateLimits = 0;
+      }
+      const shouldAbort = shouldAbortSampling({
+        status: error.status,
+        consecutiveErrors,
+        consecutiveRateLimits,
+        concurrency
+      });
       write({
         type: "sample_error",
         completed,
@@ -380,11 +440,11 @@ async function handleRun(request, response) {
         sampleIndex: item.sampleIndex,
         status: error.status || 500,
         message: error.message,
+        continuing: !shouldAbort,
         latencyMs: Date.now() - startedAt
       });
 
-      const fatalStatus = [400, 401, 403, 404, 429].includes(error.status);
-      if ((fatalStatus || consecutiveErrors >= 3) && !fatalError) {
+      if (shouldAbort && !fatalError) {
         fatalError = { status: error.status || 500, message: error.message };
         batchController.abort();
       }
@@ -425,7 +485,7 @@ async function serveStatic(request, response) {
   }
 }
 
-const server = http.createServer(async (request, response) => {
+export const server = http.createServer(async (request, response) => {
   try {
     if (!allowedOrigin(request)) {
       sendJson(response, 403, { error: "来源不被允许" });
