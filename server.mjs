@@ -266,7 +266,7 @@ export function extractAssistantText(data, protocol = "openai") {
 }
 
 function unsupportedSamplingParameter(error) {
-  return error.status === 400 && /(temperature|max_tokens|max completion|unsupported parameter|not support)/i.test(error.message);
+  return error.status === 400 && /(max_tokens|max completion|unsupported parameter|not support)/i.test(error.message);
 }
 
 export function buildProbeRequestBody(endpoint, probe) {
@@ -274,7 +274,6 @@ export function buildProbeRequestBody(endpoint, probe) {
   const body = {
     messages: [{ role: "user", content: probe.prompt }],
     stream: false,
-    temperature: 1,
     max_tokens: 256
   };
   if (String(endpoint.model ?? "").trim()) body.model = String(endpoint.model).trim();
@@ -295,10 +294,8 @@ async function requestProbe({ endpoint, probe, signal }) {
       body: JSON.stringify(baseBody)
     });
   } catch (error) {
-    if (!unsupportedSamplingParameter(error)) throw error;
-    const { temperature, ...withoutTemperature } = baseBody;
-    const { max_tokens, ...withoutSampling } = withoutTemperature;
-    const fallbackBody = protocol === "anthropic" ? withoutTemperature : withoutSampling;
+    if (protocol === "anthropic" || !unsupportedSamplingParameter(error)) throw error;
+    const { max_tokens, ...fallbackBody } = baseBody;
     data = await fetchUpstream(url, {
       method: "POST",
       headers: upstreamHeaders(endpoint.key, protocol),

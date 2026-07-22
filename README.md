@@ -132,7 +132,7 @@ water
 - 同一端点内部使用有上限的异步并发池，默认 4 路、可调 1–10；每一路仍独立创建请求体；
 - 不携带之前的 user/assistant 消息，不发送 conversation ID、previous response ID、固定 seed 或 cookie；
 - HTTP 客户端可能复用底层 TCP keep-alive 连接，但不会复用任何逻辑对话上下文；
-- 默认使用 `temperature: 1`；
+- 不发送 `temperature`，使用供应商或模型的默认采样设置；
 - 调用顺序会随机打乱，但同一批次的题面保持不变；
 - 输出预算为 256 tokens；Anthropic 的 `max_tokens` 是必填字段，协议降级时也会保留；
 - 统计只读取最终可见回答，不使用模型的 reasoning 内容；

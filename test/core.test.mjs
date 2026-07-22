@@ -275,7 +275,7 @@ test("OpenAI and Anthropic requests are fresh, stateless, and protocol-correct",
     assert.notEqual(first.messages, second.messages);
     assert.deepEqual(first.messages, [{ role: "user", content: probe.prompt }]);
     assert.equal(first.stream, false);
-    assert.equal(first.temperature, 1);
+    assert.equal("temperature" in first, false);
     assert.equal(first.max_tokens, 256);
     assert.equal(first.model, endpoint.model);
     assert.equal("system" in first, false);
@@ -337,6 +337,7 @@ test("mock upstreams receive independent requests for both protocols", async (co
       assert.equal("conversation" in body, false);
       assert.equal("container" in body, false);
       assert.equal("previous_response_id" in body, false);
+      assert.equal("temperature" in body, false);
     }
   }
 });
