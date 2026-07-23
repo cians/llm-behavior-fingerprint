@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="通过低熵随机选择任务生成并对比大模型行为指纹。" />
+    <meta name="description" content="纯静态直连模型 API，通过低熵随机选择任务生成并对比大模型行为指纹。" />
     <title>模型行为指纹实验室</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -114,7 +114,7 @@
             <p class="eyebrow"><span></span> FINGERPRINT WORKBENCH</p>
             <h2>选择一次实验</h2>
           </div>
-          <p>每个端点可独立选择 OpenAI Chat Completions 或 Anthropic Messages 协议，也支持跨协议对比。</p>
+          <p>纯静态直连：浏览器直接调用模型 API。端点必须允许当前页面来源的 CORS 请求，支持跨协议对比。</p>
         </div>
 
         <div class="mode-switch" role="tablist" aria-label="实验模式">
@@ -164,7 +164,7 @@
                   </span>
                   <datalist id="modelsA"></datalist>
                 </label>
-                <p class="field-note" id="endpointAStatus">Key 只经本机转发到你填写的 URL，不会持久化。</p>
+                  <p class="field-note" id="endpointAStatus">Key 仅由当前浏览器直连发送给填写的 URL；端点必须允许 CORS，Key 不会持久化。</p>
               </fieldset>
 
               <div class="versus-badge" id="versusBadge" aria-hidden="true"><span>VS</span></div>
@@ -201,7 +201,7 @@
                   </span>
                   <datalist id="modelsB"></datalist>
                 </label>
-                <p class="field-note" id="endpointBStatus">Key 只经本机转发；两个端点使用相同探针与采样次数。</p>
+                  <p class="field-note" id="endpointBStatus">Key 仅由当前浏览器直连发送；端点必须允许 CORS，两个端点使用相同探针与采样次数。</p>
               </fieldset>
 
               <fieldset class="endpoint-card history-picker hidden" id="historyPicker">
@@ -247,6 +247,10 @@
             </div>
 
             <div class="config-panel">
+              <aside class="direct-mode-note" aria-label="纯静态直连说明">
+                <span>DIRECT BROWSER MODE</span>
+                <p>请求直接从你的浏览器发往模型 API，本站不设代理、不接收 Key。若出现“无法直连”，通常是模型端点未开放 CORS；这时请改用支持 CORS 的网关或本地代理版。</p>
+              </aside>
               <div class="config-head">
                 <div>
                   <span class="config-index">EXPERIMENT CONFIG</span>
@@ -404,7 +408,7 @@
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
         <span><strong>MODEL TRACE</strong><small>ONE TOKEN LEAVES A TRACE.</small></span>
       </div>
-      <p>支持 OpenAI 与 Anthropic 协议。所有实验数据默认保留在当前浏览器，API Key 从不持久化。</p>
+      <p>纯静态直连版：支持 OpenAI 与 Anthropic 协议；Key 仅由浏览器发送至填写的模型端点，实验数据保留在当前浏览器。</p>
     </footer>
 
     <dialog id="methodDialog">
@@ -428,6 +432,6 @@
       </div>
     </template>
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

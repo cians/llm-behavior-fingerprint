@@ -10,11 +10,16 @@ import {
   formatPercent,
   getProbe
 } from "./core.js";
+import {
+  CONCURRENCY_LIMITS,
+  normalizeProtocol,
+  requestModelList,
+  sampleProbes
+} from "./direct-client.js";
 
 const STORAGE_KEY = "model-trace-history-v1";
 const MAX_HISTORY = 30;
 const MAX_HISTORY_IMPORT_BYTES = 2 * 1024 * 1024;
-const CONCURRENCY_LIMITS = { min: 1, max: 10, default: 4 };
 const BASE_TITLE = document.title;
 const TAB_FRAMES = ["◐", "◓", "◑", "◒"];
 const REDUCED_MOTION = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -23,14 +28,14 @@ const PROTOCOL_UI = {
   openai: {
     urlHint: "Base URL、/v1 或 /chat/completions",
     urlPlaceholder: "https://api.example.com/v1",
-    keyHint: "通过 Authorization: Bearer 发送",
+    keyHint: "由浏览器直连发送 Authorization: Bearer",
     keyPlaceholder: "sk-••••••••••••",
     modelPlaceholder: "例如：gpt-4o-mini"
   },
   anthropic: {
     urlHint: "Base URL、/v1 或 /v1/messages",
     urlPlaceholder: "https://api.anthropic.com",
-    keyHint: "通过 x-api-key 发送",
+    keyHint: "由浏览器直连发送 x-api-key",
     keyPlaceholder: "sk-ant-••••••••••",
     modelPlaceholder: "例如：claude-sonnet-4-5"
   }
@@ -457,8 +462,8 @@ function updateProtocolUi(suffix) {
   form[`model${suffix}`].placeholder = copy.modelPlaceholder;
   const status = document.querySelector(`#endpoint${suffix}Status`);
   status.textContent = protocol === "anthropic"
-    ? "使用 Messages 格式与 x-api-key；模型 ID 必填，Key 不会持久化。"
-    : "使用 Chat Completions 格式与 Bearer Key；Key 不会持久化。";
+    ? "浏览器直连 Messages 与 x-api-key；模型 ID 必填，端点必须允许 CORS，Key 不会持久化。"
+    : "浏览器直连 Chat Completions 与 Bearer Key；端点必须允许 CORS，Key 不会持久化。";
   status.className = "field-note";
 }
 
@@ -485,11 +490,21 @@ function validateExperiment() {
     return `异步并发请求数需在 ${CONCURRENCY_LIMITS.min} 到 ${CONCURRENCY_LIMITS.max} 之间。`;
   }
   const endpointA = getEndpoint("A");
-  try { new URL(endpointA.url); } catch { return "请输入有效的端点 A 模型 URL。"; }
+  try {
+    const url = new URL(endpointA.url);
+    if (!['http:', 'https:'].includes(url.protocol)) return "端点 A 模型 URL 仅支持 http 或 https。";
+    if (location.protocol === "https:" && url.protocol !== "https:") return "当前页面通过 HTTPS 打开，端点 A 也必须使用 HTTPS，否则浏览器会拦截混合内容。";
+    normalizeProtocol(endpointA.protocol);
+  } catch { return "请输入有效的端点 A 模型 URL。"; }
   if (endpointA.protocol === "anthropic" && !endpointA.model) return "Anthropic 端点 A 必须填写模型 ID。";
   if (state.mode === "dual") {
     const endpointB = getEndpoint("B");
-    try { new URL(endpointB.url); } catch { return "请输入有效的端点 B 模型 URL。"; }
+    try {
+      const url = new URL(endpointB.url);
+      if (!['http:', 'https:'].includes(url.protocol)) return "端点 B 模型 URL 仅支持 http 或 https。";
+      if (location.protocol === "https:" && url.protocol !== "https:") return "当前页面通过 HTTPS 打开，端点 B 也必须使用 HTTPS，否则浏览器会拦截混合内容。";
+      normalizeProtocol(endpointB.protocol);
+    } catch { return "请输入有效的端点 B 模型 URL。"; }
     if (endpointB.protocol === "anthropic" && !endpointB.model) return "Anthropic 端点 B 必须填写模型 ID。";
   }
   if (state.mode === "history" && !state.histories.some((history) => history.id === elements.historySelect.value)) {
@@ -542,67 +557,34 @@ function updateLiveConsole(event, samples, totalOffset, grandTotal) {
   elements.livePeak.textContent = fingerprint.peak.share ? `${fingerprint.peak.value} · ${formatPercent(fingerprint.peak.share)}` : "—";
 }
 
-async function readNdjson(response, onEvent) {
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `请求失败：HTTP ${response.status}`);
-  }
-  if (!response.body) throw new Error("浏览器不支持流式响应");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (line.trim()) onEvent(JSON.parse(line));
-    }
-    if (done) break;
-  }
-  if (buffer.trim()) onEvent(JSON.parse(buffer));
-}
-
 async function sampleEndpoint(endpoint, tag, totalOffset, grandTotal, concurrency) {
   const probeIds = [...state.probeIds];
   const samples = Object.fromEntries(probeIds.map((probeId) => [probeId, []]));
   const errors = [];
+  const probes = probeIds.map(activeProbe).filter(Boolean);
   elements.activeEndpoint.textContent = `${tag} · ${concurrency} 路`;
   elements.consoleTitle.textContent = `正在采集端点 ${tag} 的行为信号`;
   updateExperimentVisuals(totalOffset, grandTotal, tag);
-  logEvent(`端点 ${tag} 开始采样：${endpoint.label}`);
+  logEvent(`端点 ${tag} 开始由浏览器直连采样：${endpoint.label}`);
 
-  const response = await fetch("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      endpoint,
-      probeIds,
-      samplesPerProbe: state.samplesPerProbe,
-      concurrency,
-      customProbe: state.customProbe
-    }),
-    signal: state.abortController.signal
-  });
-
-  let fatalMessage = "";
-  await readNdjson(response, (event) => {
-    if (event.type === "sample") {
-      samples[event.probeId].push({ value: event.value, raw: event.raw, latencyMs: event.latencyMs });
-      updateLiveConsole(event, samples, totalOffset, grandTotal);
-      logEvent(`${activeProbe(event.probeId).shortLabel} → ${event.value || `未解析：${event.raw}`}`);
-    } else if (event.type === "sample_error") {
-      samples[event.probeId].push({ value: null, error: event.message, status: event.status, latencyMs: event.latencyMs });
+  await sampleProbes({
+    endpoint,
+    probes,
+    samplesPerProbe: state.samplesPerProbe,
+    concurrency,
+    signal: state.abortController.signal,
+    onSample: (event) => {
+      samples[event.probe.id].push({ value: event.result.value, raw: event.result.raw.slice(0, 200), latencyMs: event.latencyMs });
+      updateLiveConsole({ completed: event.completed, probeId: event.probe.id }, samples, totalOffset, grandTotal);
+      logEvent(`${event.probe.shortLabel} → ${event.result.value || `未解析：${event.result.raw}`}`);
+    },
+    onError: (event) => {
+      samples[event.probe.id].push({ value: null, error: event.message, status: event.status, latencyMs: event.latencyMs });
       errors.push(event.message);
-      updateLiveConsole(event, samples, totalOffset, grandTotal);
-      const continuation = event.continuing ? "（已跳过本样本并继续）" : "";
-      logEvent(`${activeProbe(event.probeId).shortLabel} 请求失败：${event.message}${continuation}`, true);
-    } else if (event.type === "fatal") {
-      fatalMessage = event.message;
+      updateLiveConsole({ completed: event.completed, probeId: event.probe.id }, samples, totalOffset, grandTotal);
+      logEvent(`${event.probe.shortLabel} 请求失败：${event.message}${event.continuing ? "（已跳过本样本并继续）" : ""}`, true);
     }
   });
-  if (fatalMessage) throw new Error(fatalMessage);
   const fingerprint = buildFingerprint({ probeIds, samples, probes: state.customProbe ? [state.customProbe] : [] });
   if (!fingerprint.valid) throw new Error(errors[0] || "没有得到可解析的模型回答");
   logEvent(`端点 ${tag} 完成，指纹 ${fingerprint.signature}`);
@@ -878,19 +860,13 @@ async function loadModels(suffix) {
   status.textContent = "正在读取模型列表…";
   status.className = "field-note";
   try {
-    const response = await fetch("/api/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: endpoint.url, key: endpoint.key, protocol: endpoint.protocol })
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "读取模型列表失败");
+    const models = await requestModelList({ endpoint });
     const datalist = document.querySelector(`#models${normalizedSuffix}`);
-    datalist.innerHTML = data.models.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
-    if (data.models.length === 1 && !elements.form.elements[`model${normalizedSuffix}`].value) {
-      elements.form.elements[`model${normalizedSuffix}`].value = data.models[0];
+    datalist.innerHTML = models.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+    if (models.length === 1 && !elements.form.elements[`model${normalizedSuffix}`].value) {
+      elements.form.elements[`model${normalizedSuffix}`].value = models[0];
     }
-    status.textContent = data.models.length ? `已读取 ${data.models.length} 个模型，可在输入框选择。` : "端点未返回可用模型，请手动输入模型 ID。";
+    status.textContent = models.length ? `已读取 ${models.length} 个模型，可在输入框选择。` : "端点未返回可用模型，请手动输入模型 ID。";
     status.className = "field-note success";
   } catch (error) {
     status.textContent = error.message;

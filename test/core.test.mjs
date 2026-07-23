@@ -24,11 +24,12 @@ import {
   normalizeConcurrency,
   normalizeProtocol,
   PROBE_SYSTEM_PROMPT,
+  REQUEST_TIMEOUT_MS,
   runWithConcurrency,
-  server,
+  sampleProbes,
   shouldAbortSampling,
   upstreamHeaders
-} from "../server.mjs";
+} from "../public/direct-client.js";
 
 test("normalizes common OpenAI-compatible endpoint forms", () => {
   assert.equal(buildChatCompletionsUrl("https://api.example.com").href, "https://api.example.com/v1/chat/completions");
@@ -390,7 +391,11 @@ test("mock upstreams receive independent requests for both protocols", async (co
   }
 });
 
-test("a single upstream 429 is recorded and the sampling run still completes", async (context) => {
+test("direct mode keeps the 120 second per-request limit", () => {
+  assert.equal(REQUEST_TIMEOUT_MS, 120_000);
+});
+
+test("direct browser sampler records one 429 and continues independent requests", async (context) => {
   const http = await import("node:http");
   let requestCount = 0;
   const mock = http.createServer(async (request, response) => {
@@ -415,39 +420,22 @@ test("a single upstream 429 is recorded and the sampling run still completes", a
   await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve));
   context.after(() => mock.close());
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  context.after(() => server.close());
-
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      endpoint: {
-        label: "Mock",
-        protocol: "openai",
-        url: `http://127.0.0.1:${mock.address().port}`,
-        model: "mock-model"
-      },
-      probeIds: ["letter"],
-      samplesPerProbe: 10,
-      concurrency: 4
-    })
+  const samples = [];
+  const errors = [];
+  await sampleProbes({
+    endpoint: { protocol: "openai", url: `http://127.0.0.1:${mock.address().port}`, model: "mock-model" },
+    probes: [getProbe("letter")],
+    samplesPerProbe: 10,
+    concurrency: 4,
+    onSample: (event) => samples.push(event),
+    onError: (event) => errors.push(event)
   });
-  const events = (await response.text())
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
 
-  const failures = events.filter((event) => event.type === "sample_error");
-  assert.equal(response.status, 200);
   assert.equal(requestCount, 10);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].status, 429);
-  assert.equal(failures[0].continuing, true);
-  assert.match(failures[0].message, /HTTP 429 .* Mock Provider .* Temporary rate limit/);
-  assert.equal(events.filter((event) => event.type === "sample").length, 9);
-  assert.equal(events.some((event) => event.type === "fatal"), false);
-  assert.equal(events.at(-1).type, "done");
-  assert.equal(events.at(-1).completed, 10);
+  assert.equal(samples.length, 9);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].status, 429);
+  assert.equal(errors[0].continuing, true);
+  assert.match(errors[0].message, /HTTP 429 .* Mock Provider .* Temporary rate limit/);
+  assert.deepEqual(samples.map((event) => event.result.value), Array(9).fill("Q"));
 });

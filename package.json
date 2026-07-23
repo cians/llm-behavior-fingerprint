@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
-    "dev": "node --watch server.mjs",
+    "start": "python3 -m http.server 4173 --directory public",
+    "dev": "python3 -m http.server 4173 --directory public",
+    "serve:static": "python3 -m http.server 4173 --directory public",
     "test": "node --test"
   }
 }

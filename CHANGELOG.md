@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — static-direct branch
+
+### Changed
+
+- Remove the Node API proxy and issue all non-streaming model requests directly from the browser.
+- Add a GitHub Pages workflow that publishes the `public/` directory.
+- Require CORS support from model endpoints and surface CORS-specific direct-connection guidance in the UI.
+
 ## 0.1.0 - 2026-07-21
 
 ### Features

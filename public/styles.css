@@ -273,6 +273,9 @@ main { width: min(1220px, calc(100% - 48px)); margin: 0 auto; }
 .protocol-badge.anthropic { border-color: rgba(255,143,91,.34); color: var(--orange); }
 
 .config-panel { border-top: 1px solid var(--line); padding: 30px 34px 34px; }
+.direct-mode-note { display: grid; grid-template-columns: 156px 1fr; gap: 14px; margin: -1px 0 24px; padding: 13px 15px; border: 1px solid rgba(101,247,212,.24); background: linear-gradient(90deg, rgba(101,247,212,.075), rgba(4,11,8,.28)); }
+.direct-mode-note span { color: var(--cyan); font: 10px/1.5 var(--mono); letter-spacing: .12em; }
+.direct-mode-note p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .config-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
 .config-index { color: var(--cyan); font: 9px var(--mono); letter-spacing: 0.14em; }
 .config-head h3 { font: 600 24px var(--serif); margin: 5px 0 0; }
@@ -588,6 +591,7 @@ dialog h2 { font: 600 34px/1.25 var(--serif); letter-spacing: -.04em; margin: 0 
   .mode-switch { grid-template-columns: 1fr; }
   .mode-tab { min-height: 75px; border-right: 0; border-bottom: 1px solid var(--line); }
   .endpoint-card, .config-panel { padding-left: 20px; padding-right: 20px; }
+  .direct-mode-note { grid-template-columns: 1fr; gap: 5px; }
   .history-pair-selects { grid-template-columns: 1fr; gap: 12px; }
   .history-pair-vs { margin: 0 auto; }
   .history-pair-preview { grid-template-columns: 1fr; }
