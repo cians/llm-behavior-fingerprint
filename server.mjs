@@ -211,7 +211,7 @@ export function upstreamHeaders(key, protocol = "openai") {
   return headers;
 }
 
-async function fetchUpstream(url, options, timeoutMs = 45_000) {
+async function fetchUpstream(url, options, timeoutMs = 120_000) {
   const controller = new AbortController();
   const externalSignal = options.signal;
   const abortFromExternal = () => controller.abort();
