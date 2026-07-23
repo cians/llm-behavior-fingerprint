@@ -113,10 +113,11 @@ main { width: min(1220px, calc(100% - 48px)); margin: 0 auto; }
 .eyebrow { margin: 0 0 22px; color: var(--cyan); font: 11px/1 var(--mono); letter-spacing: 0.18em; text-transform: uppercase; display: flex; align-items: center; gap: 10px; }
 .eyebrow span { width: 26px; height: 1px; background: currentColor; position: relative; }
 .eyebrow span::after { content: ""; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: currentColor; right: 0; top: -1px; }
-.hero h1 { margin: 0; font: 600 clamp(50px, 5.6vw, 82px)/1.08 var(--serif); letter-spacing: -0.055em; }
-.hero h1 span { color: var(--acid); position: relative; white-space: nowrap; }
-.hero h1 span::after { content: ""; position: absolute; left: 3px; right: 1px; bottom: -5px; height: 7px; border-bottom: 1px solid var(--acid); border-radius: 50%; opacity: 0.8; transform: rotate(-1deg); }
-.hero-lead { max-width: 620px; color: #abb8b2; font-size: 17px; line-height: 1.9; margin: 32px 0 34px; }
+.hero h1 { margin: 0; max-width: 640px; font: 600 clamp(52px, 4.8vw, 70px)/1.13 var(--serif); letter-spacing: -0.065em; }
+.hero-title-line { display: block; white-space: nowrap; }
+.hero-title-line.accent { width: max-content; max-width: 100%; color: var(--acid); position: relative; }
+.hero-title-line.accent::after { content: ""; position: absolute; left: 3px; right: 1px; bottom: -6px; height: 7px; border-bottom: 1px solid var(--acid); border-radius: 50%; opacity: 0.8; transform: rotate(-1deg); }
+.hero-lead { max-width: 590px; color: #abb8b2; font-size: 16px; line-height: 1.9; margin: 28px 0 34px; }
 .hero-actions { display: flex; align-items: center; gap: 28px; }
 
 .primary-button, .secondary-button, .text-button, .run-button {
@@ -571,7 +572,7 @@ dialog h2 { font: 600 34px/1.25 var(--serif); letter-spacing: -.04em; margin: 0 
   .tab-run-state { width: 76px; left: auto; right: 46px; padding: 0 8px; }
   .tab-run-state b { display: none; }
   .hero { min-height: auto; padding: 62px 0 50px; }
-  .hero h1 { font-size: clamp(44px, 13vw, 65px); }
+  .hero h1 { font-size: clamp(32px, 10vw, 44px); line-height: 1.18; }
   .hero-lead { font-size: 15px; }
   .hero-actions { align-items: flex-start; flex-direction: column; gap: 12px; }
   .hero-instrument { height: 390px; transform: scale(.72); transform-origin: center; margin: -55px -35px; }
