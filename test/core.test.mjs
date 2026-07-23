@@ -151,7 +151,11 @@ test("extracts only final Anthropic text blocks", () => {
 });
 
 test("parses constrained answers without accepting unrelated text", () => {
-  assert.equal(parseProbeAnswer("number", "I choose 73."), "73");
+  assert.equal(parseProbeAnswer("number", "I choose -7."), "-7");
+  assert.equal(parseProbeAnswer("number", "0"), "0");
+  assert.equal(parseProbeAnswer("number", "10"), "10");
+  assert.equal(parseProbeAnswer("number", "11"), null);
+  assert.equal(parseProbeAnswer("number", "-11"), null);
   assert.equal(parseProbeAnswer("color", "Blue"), "blue");
   assert.equal(parseProbeAnswer("city", "New York."), "New York");
   assert.equal(parseProbeAnswer("letter", "Letter Q"), "Q");
@@ -262,7 +266,7 @@ test("probe requests use a shared no-tools system instruction without revealing 
   const body = buildProbeRequestBody({ protocol: "openai", model: "example-model" }, getProbe("number"));
   assert.deepEqual(body.messages, [
     { role: "system", content: PROBE_SYSTEM_PROMPT },
-    { role: "user", content: "Choose one random integer from 1 to 100. Return only the integer." }
+    { role: "user", content: "Choose one random integer from -10 to 10. Return only the integer." }
   ]);
   assert.match(PROBE_SYSTEM_PROMPT, /do not use, call, or attempt to use any tools/i);
   assert.doesNotMatch(PROBE_SYSTEM_PROMPT, /test|fingerprint|behavioral/i);

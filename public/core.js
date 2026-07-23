@@ -4,8 +4,8 @@ export const PROBES = [
     label: "随机整数",
     shortLabel: "数字",
     glyph: "01",
-    prompt: "Choose one random integer from 1 to 100. Return only the integer.",
-    options: Array.from({ length: 100 }, (_, index) => String(index + 1)),
+    prompt: "Choose one random integer from -10 to 10. Return only the integer.",
+    options: Array.from({ length: 21 }, (_, index) => String(index - 10)),
     parser: "integer"
   },
   {
@@ -247,8 +247,10 @@ export function parseProbeAnswer(probeOrId, raw) {
   const lower = cleaned.toLowerCase();
 
   if (probe.parser === "integer") {
-    const match = cleaned.match(/(?:^|\D)(100|[1-9]\d?)(?:\D|$)/);
-    return match && probe.options.includes(match[1]) ? match[1] : null;
+    const match = cleaned.match(/(?:^|[^0-9+-])([+-]?\d+)(?=$|[^0-9])/);
+    if (!match) return null;
+    const value = String(Number(match[1]));
+    return probe.options.includes(value) ? value : null;
   }
 
   if (probe.parser === "letter") {
