@@ -23,6 +23,7 @@ import {
   formatUpstreamError,
   normalizeConcurrency,
   normalizeProtocol,
+  PROBE_SYSTEM_PROMPT,
   runWithConcurrency,
   server,
   shouldAbortSampling,
@@ -257,13 +258,14 @@ test("sampling presets produce real distributions and allow larger custom runs",
   assert.equal(PRESETS.deep.samplesPerProbe, 30);
 });
 
-test("probe requests do not reveal that the prompt is part of a test", () => {
+test("probe requests use a shared no-tools system instruction without revealing the experiment", () => {
   const body = buildProbeRequestBody({ protocol: "openai", model: "example-model" }, getProbe("number"));
   assert.deepEqual(body.messages, [
+    { role: "system", content: PROBE_SYSTEM_PROMPT },
     { role: "user", content: "Choose one random integer from 1 to 100. Return only the integer." }
   ]);
-  assert.equal(body.messages.some((message) => message.role === "system"), false);
-  assert.doesNotMatch(JSON.stringify(body), /test|fingerprint|behavioral/i);
+  assert.match(PROBE_SYSTEM_PROMPT, /do not use, call, or attempt to use any tools/i);
+  assert.doesNotMatch(PROBE_SYSTEM_PROMPT, /test|fingerprint|behavioral/i);
 });
 
 test("every sample builds a fresh stateless chat request", () => {
@@ -274,10 +276,16 @@ test("every sample builds a fresh stateless chat request", () => {
 
   assert.notEqual(first, second);
   assert.notEqual(first.messages, second.messages);
-  assert.deepEqual(first.messages, [{ role: "user", content: probe.prompt }]);
-  assert.deepEqual(second.messages, [{ role: "user", content: probe.prompt }]);
+  assert.deepEqual(first.messages, [
+    { role: "system", content: PROBE_SYSTEM_PROMPT },
+    { role: "user", content: probe.prompt }
+  ]);
+  assert.deepEqual(second.messages, [
+    { role: "system", content: PROBE_SYSTEM_PROMPT },
+    { role: "user", content: probe.prompt }
+  ]);
   for (const body of [first, second]) {
-    assert.equal(body.messages.length, 1);
+    assert.equal(body.messages.length, 2);
     assert.equal("previous_response_id" in body, false);
     assert.equal("conversation" in body, false);
     assert.equal("seed" in body, false);
@@ -292,16 +300,23 @@ test("OpenAI and Anthropic requests are fresh, stateless, and protocol-correct",
   ];
 
   for (const endpoint of endpoints) {
+    const protocol = endpoint.protocol;
     const first = buildProbeRequestBody(endpoint, probe);
     const second = buildProbeRequestBody(endpoint, probe);
     assert.notEqual(first, second);
     assert.notEqual(first.messages, second.messages);
-    assert.deepEqual(first.messages, [{ role: "user", content: probe.prompt }]);
+    assert.deepEqual(first.messages, protocol === "anthropic"
+      ? [{ role: "user", content: probe.prompt }]
+      : [
+          { role: "system", content: PROBE_SYSTEM_PROMPT },
+          { role: "user", content: probe.prompt }
+        ]);
     assert.equal(first.stream, false);
     assert.equal("temperature" in first, false);
     assert.equal(first.max_tokens, 256);
     assert.equal(first.model, endpoint.model);
-    assert.equal("system" in first, false);
+    if (protocol === "anthropic") assert.equal(first.system, PROBE_SYSTEM_PROMPT);
+    else assert.equal("system" in first, false);
     assert.equal("container" in first, false);
     assert.equal("metadata" in first, false);
     assert.equal("previous_response_id" in first, false);
@@ -354,9 +369,15 @@ test("mock upstreams receive independent requests for both protocols", async (co
     assert.equal(seen[protocol].length, 10);
     assert.equal(new Set(seen[protocol]).size, 10);
     for (const body of seen[protocol]) {
-      assert.deepEqual(body.messages, [{ role: "user", content: probe.prompt }]);
-      assert.equal(body.messages.length, 1);
-      assert.equal("system" in body, false);
+      assert.deepEqual(body.messages, protocol === "anthropic"
+        ? [{ role: "user", content: probe.prompt }]
+        : [
+            { role: "system", content: PROBE_SYSTEM_PROMPT },
+            { role: "user", content: probe.prompt }
+          ]);
+      assert.equal(body.messages.length, protocol === "anthropic" ? 1 : 2);
+      if (protocol === "anthropic") assert.equal(body.system, PROBE_SYSTEM_PROMPT);
+      else assert.equal("system" in body, false);
       assert.equal("conversation" in body, false);
       assert.equal("container" in body, false);
       assert.equal("previous_response_id" in body, false);

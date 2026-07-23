@@ -12,6 +12,7 @@ const MAX_BODY_BYTES = 80 * 1024;
 const MAX_REQUESTS = 1_000;
 const PROTOCOLS = new Set(["openai", "anthropic"]);
 export const CONCURRENCY_LIMITS = Object.freeze({ min: 1, max: 10, default: 4 });
+export const PROBE_SYSTEM_PROMPT = "Answer the user's request directly. Do not use, call, or attempt to use any tools, functions, code execution, web browsing, or external resources. Return only the requested answer.";
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -270,12 +271,21 @@ function unsupportedSamplingParameter(error) {
 }
 
 export function buildProbeRequestBody(endpoint, probe) {
-  normalizeProtocol(endpoint.protocol);
+  const protocol = normalizeProtocol(endpoint.protocol);
+  const userMessage = { role: "user", content: probe.prompt };
   const body = {
-    messages: [{ role: "user", content: probe.prompt }],
     stream: false,
     max_tokens: 256
   };
+  if (protocol === "anthropic") {
+    body.system = PROBE_SYSTEM_PROMPT;
+    body.messages = [userMessage];
+  } else {
+    body.messages = [
+      { role: "system", content: PROBE_SYSTEM_PROMPT },
+      userMessage
+    ];
+  }
   if (String(endpoint.model ?? "").trim()) body.model = String(endpoint.model).trim();
   return body;
 }

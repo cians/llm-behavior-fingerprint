@@ -279,7 +279,7 @@
 
               <div class="probe-picker">
                 <div class="probe-head">
-                  <div><b>本次探针</b><small>每个样本都是一次独立请求，只包含当前单条 user 消息</small></div>
+                  <div><b>本次探针</b><small>每个样本都是独立请求；统一系统约束禁止调用工具</small></div>
                   <span id="probeCount">8 / 10</span>
                 </div>
                 <div class="probe-grid" id="probeGrid"></div>
@@ -409,7 +409,7 @@
       <p class="eyebrow"><span></span> METHOD NOTE</p>
       <h2>它比较的不是答案，<br />而是答案背后的分布。</h2>
       <div class="dialog-copy">
-        <p>实验通过 OpenAI Chat Completions 或 Anthropic Messages 协议，对数字、颜色、动物、城市等固定选择题，或你定义的候选答案 Prompt 重复采样。每个样本都是一次没有历史上下文的独立请求，每个维度最终形成一个离散概率分布。</p>
+        <p>实验通过 OpenAI Chat Completions 或 Anthropic Messages 协议，对数字、颜色、动物、城市等固定选择题，或你定义的候选答案 Prompt 重复采样。每个样本都是一次没有历史上下文的独立请求，并附带统一的系统约束以禁止调用工具；每个维度最终形成一个离散概率分布。</p>
         <p>两个指纹的每个共同维度使用 Jensen–Shannon 距离比较，再取平均得到总体距离。页面同时把共同维度覆盖率、样本量和有效率折算为“采样置信度”。</p>
         <p>距离越小，行为分布越接近；但“接近”仍可能来自模型家族、相同训练来源、路由策略或样本不足，因此结果只表达统计相似性。</p>
       </div>

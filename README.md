@@ -127,7 +127,8 @@ water
 
 ## 采样协议
 
-- 请求只包含一条普通 `user` 消息，不附加会透露测试性质的 system prompt；
+- 每次请求附带相同的系统指令：直接回答当前问题、禁止调用或尝试调用工具、函数、代码执行、浏览或外部资源；该指令不透露实验或指纹用途。OpenAI 请求将其作为 `system` 消息，Anthropic 请求将其作为顶层 `system` 字段；
+- 除这条统一系统指令与当前单条 `user` 消息外，不附加任何历史消息；
 - **每一个样本都是一次全新的、独立的 HTTP POST**：OpenAI 使用 `/chat/completions`，Anthropic 使用 `/v1/messages`；
 - 同一端点内部使用有上限的异步并发池，默认 4 路、可调 1–10；每一路仍独立创建请求体；
 - 不携带之前的 user/assistant 消息，不发送 conversation ID、previous response ID、固定 seed 或 cookie；
