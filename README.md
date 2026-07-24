@@ -1,12 +1,43 @@
-# LLM Behavior Fingerprint — Static Direct Mode
+# 模型行为指纹实验室 · Model Trace
 
-这是 `static-direct` 分支：一个可部署到 GitHub Pages 的纯静态大模型行为指纹页面。
+> 在线体验：[https://cians.github.io/llm-behavior-fingerprint/](https://cians.github.io/llm-behavior-fingerprint/)
 
-浏览器会使用 OpenAI Chat Completions 或 Anthropic Messages 协议，直接向你填写的模型端点发送多次独立、非流式的随机选择请求，统计答案的概率分布，并以 Jensen–Shannon 距离比较两个指纹。
+**不需要后端，也不需要把 Key 交给本站。** 在同一道看似随机的选择题上进行多次、无上下文的独立采样，模型对答案的微弱偏好会沉淀成可比较的概率分布——这就是它的行为指纹。
+
+这是 `static-direct` 分支：一个可直接部署到 GitHub Pages 的纯静态大模型行为指纹实验室。它支持 OpenAI Chat Completions 和 Anthropic Messages 协议，可生成单个模型指纹、比较两个端点，或与本地历史指纹进行比较。
+
+## 为什么可以放心多人同时使用
+
+**计算、并发和模型请求都由每位访问者自己的浏览器完成；GitHub Pages 只分发静态文件。** 因此多人同时实验不会消耗本项目的后台机器，也不会让 Key、模型输出或历史结果流经本站。
+
+```text
+GitHub Pages
+  └─ 仅提供 HTML / CSS / JavaScript
+
+每位用户的浏览器
+  ├─ 独立发起非流式模型请求
+  ├─ 本地控制并发、超时与重试
+  ├─ 本地计算概率分布与指纹距离
+  └─ 本地保存历史记录
+       └─ 直接 POST → 用户填写的模型 API
+```
+
+- **Key 不经过本站**：仅由当前浏览器直接发送到你填写的模型 API，不写入 LocalStorage、历史或导出文件；
+- **无共享实验队列**：每个用户使用自己的网络和设备性能；真正可能承压的是所调用的模型 API / 网关；
+- **历史不共享**：结果默认只存于当前浏览器，可按需导出 JSON 并手动导入到另一台设备；
+- **每次样本相互独立**：每一次都是新的非流式 HTTP 请求，不带历史消息、会话 ID 或 cookie。
+
+## 它能做什么
+
+- 用多个内置随机选择探针，或自定义一个可归一化答案的随机 Prompt；
+- 对同一模型重复独立采样，形成数字、颜色、字母、动物等多维经验分布；
+- 用 Jensen–Shannon Distance 比较两个端点或两条历史指纹；
+- 支持 429 容错、可调并发、120 秒单请求超时、历史导入 / 导出；
+- 在不暴露测试目的的统一 System Prompt 下，禁止模型调用工具、函数、代码执行、浏览器或外部资源。
 
 > 行为指纹是统计线索，而不是模型身份的绝对证明。模型更新、供应商路由、系统提示、采样参数和时间窗口都会影响结果。
 
-## 与主分支的区别
+## 纯静态直连模式
 
 本分支不运行 API 代理，且不需要 Node 后端：
 
@@ -19,7 +50,7 @@
 - API Key 不上传至本站、GitHub 或项目作者的服务器；它仅由当前浏览器发送给你填写的模型 API；
 - 每个样本都是独立的 `fetch`，`stream: false`，浏览器内受控并发；
 - 单次模型请求超时为 120 秒，模型列表读取为 20 秒；
-- 历史、导入、导出和指纹对比均保存在当前浏览器中。
+- 历史、导入、导出和指纹对比均保存在当前浏览器中，不会与其他用户共享。
 
 ## 必要条件：模型 API 必须支持 CORS
 
@@ -60,11 +91,7 @@ python3 -m http.server 4173 --directory public
 
 本分支附带 [pages.yml](.github/workflows/pages.yml)，推送到 `static-direct` 后会发布 `public/` 目录。
 
-首次启用时，在 GitHub 仓库的 **Settings → Pages → Build and deployment** 中选择 **GitHub Actions**。工作流完成后，页面通常位于：
-
-```text
-https://cians.github.io/llm-behavior-fingerprint/
-```
+首次启用时，在 GitHub 仓库的 **Settings → Pages → Build and deployment** 中选择 **GitHub Actions**。工作流完成后，页面位于：[https://cians.github.io/llm-behavior-fingerprint/](https://cians.github.io/llm-behavior-fingerprint/)。
 
 页面使用相对资源路径，因此也可部署到项目页子路径。
 
