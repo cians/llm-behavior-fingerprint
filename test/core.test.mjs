@@ -20,6 +20,7 @@ import {
   buildModelsUrl,
   buildProbeRequestBody,
   extractAssistantText,
+  formatBrowserFetchError,
   formatUpstreamError,
   normalizeConcurrency,
   normalizeProtocol,
@@ -126,6 +127,14 @@ test("surfaces nested provider details from OpenRouter-style errors", () => {
   }, 429);
 
   assert.equal(message, "HTTP 429 · Provider returned error · Moonshot AI · Rate limit exceeded for this model");
+});
+
+test("labels opaque browser failures without misreporting them as upstream errors", () => {
+  const message = formatBrowserFetchError(new TypeError("Failed to fetch"));
+  assert.match(message, /未收到可读取的上游响应/);
+  assert.match(message, /无法显示原始上游错误/);
+  assert.match(message, /浏览器错误：Failed to fetch/);
+  assert.match(message, /CORS 预检/);
 });
 
 test("isolated rate limits continue while repeated rate limits and auth errors stop", () => {

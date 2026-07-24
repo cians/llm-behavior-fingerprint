@@ -56,6 +56,11 @@ export function formatUpstreamError(data, httpStatus) {
   return unique.join(" · ").slice(0, 500) || `HTTP ${httpStatus} · 上游请求失败`;
 }
 
+export function formatBrowserFetchError(error) {
+  const browserMessage = cleanErrorText(error?.message) || "浏览器未提供详细原因";
+  return `浏览器未收到可读取的上游响应，无法显示原始上游错误（浏览器错误：${browserMessage}）。可能原因包括 CORS 预检、网络或 DNS、TLS 证书、混合内容及浏览器扩展拦截。`;
+}
+
 function parseEndpoint(rawUrl) {
   let parsed;
   try {
@@ -231,9 +236,7 @@ async function fetchJson(url, options, timeoutMs) {
       if (externalSignal?.aborted) throw new DirectRequestError(499, "模型请求已取消");
       if (timedOut) throw new DirectRequestError(504, `模型请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
     }
-    if (error instanceof TypeError) {
-      throw new DirectRequestError(0, "浏览器无法直连模型端点。请确认 URL 可访问，且模型 API 已允许本页面来源的 CORS 请求。");
-    }
+    if (error instanceof TypeError) throw new DirectRequestError(0, formatBrowserFetchError(error));
     throw new DirectRequestError(502, `无法连接模型端点：${error.message}`);
   } finally {
     clearTimeout(timeout);
