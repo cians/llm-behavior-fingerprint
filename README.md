@@ -1,4 +1,4 @@
-# 模型行为指纹实验室 · Model Trace
+# 模型行为指纹检测 · Model Trace
 
 > 在线体验：[https://cians.github.io/llm-behavior-fingerprint/](https://cians.github.io/llm-behavior-fingerprint/)
 
